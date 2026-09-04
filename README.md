@@ -299,7 +299,9 @@ with ffmpeg at test time (the tests may call ffmpeg; the skill never does). Meas
 - Loudness true-peak of a lossy output (`m4a`, `mp3`, …) may exceed the ceiling by the codec's overshoot; the
   verification happens on the PCM intermediate.
 - `doctor` reports core ffmpeg filters (`volume`, `afade`, `amix`, `pan`, `aformat`) as `unknown` because
-  ffmpeg-skill's doctor does not probe them; they are verified by output validation at run time.
+  ffmpeg-skill's doctor does not probe them; they are verified by output validation at run time. On FFmpeg ≥ 8.0
+  ffmpeg-skill 0.9's doctor parses no filters at all (`-filters` prints two flag characters, its pattern expects
+  three), so *every* filter capability is `unknown` there (`checks.filter_detection`), never falsely `unsupported`.
 - No cache eviction: the work directory grows until the caller removes `<workspace>/.audio-production/<project_id>/`.
 
 ## Future extensions (not in this release)

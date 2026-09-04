@@ -45,12 +45,16 @@ def capability_status(skill_info: Optional[Any], ffdoc: Dict[str, Any]) -> Dict[
     status["ffprobe"] = "supported" if fp_ok else "unsupported"
     available = set(ffdoc.get("available") or [])
     missing = set(ffdoc.get("missing") or []) | set(ffdoc.get("missing_optional") or [])
+    # ffmpeg-skill's doctor parses `ffmpeg -filters` with a three-flag pattern; FFmpeg >= 8.0 prints two flags, so it
+    # reports every filter as missing there. A working ffmpeg always has some of the filters ffmpeg-skill requires, so
+    # "ffmpeg present, zero filters detected" means the detection failed, not that the filters are absent.
+    filters_unreliable = ff_ok and not any(c.startswith("filter:") for c in available)
     for cap in sorted({c for _, extra in TOOL_FOR.values() for c in extra} | {f["capability"] for f in OUTPUT_FORMATS.values()} | set(CORE_FILTERS)):
         if not ff_ok:
             status[cap] = "unsupported"
         elif cap in available:
             status[cap] = "supported"
-        elif cap in missing:
+        elif cap in missing and not (cap.startswith("filter:") and filters_unreliable):
             status[cap] = "unsupported"
         elif cap == "encoder:pcm_s16le":
             status[cap] = "supported" if ff_ok else "unsupported"   # native encoder of every ffmpeg build; needed for probe-verified WAV intermediates
@@ -85,6 +89,13 @@ def doctor_report(ffmpeg_skill_dir: Optional[str] = None, workspace: Optional[st
         problems.append("ffmpeg-skill: " + e.message)
     caps = capability_status(info, ffdoc)
     checks["capabilities"] = caps
+    warnings: List[str] = []
+    if ffdoc.get("ffmpeg") and not any(c.startswith("filter:") for c in ffdoc.get("available") or []):
+        checks["filter_detection"] = {"status": "unknown", "detail": "ffmpeg-skill doctor detected no filters at all (its `-filters` parser expects the pre-8.0 three-flag "
+                                      "format); filter capabilities are reported unknown and verified per run by output validation"}
+        warnings.append("filter detection through ffmpeg-skill doctor is unreliable on this ffmpeg; filter capabilities are unknown")
+    else:
+        checks["filter_detection"] = {"status": "ok", "detail": "filters detected by ffmpeg-skill doctor"}
     ops: Dict[str, Any] = {}
     for typ, spec in OPERATION_TYPES.items():
         tool, extra = TOOL_FOR[typ]
@@ -109,7 +120,7 @@ def doctor_report(ffmpeg_skill_dir: Optional[str] = None, workspace: Optional[st
     unsupported = sorted(t for t, o in ops.items() if o["status"] == "unsupported")
     status = "fail" if problems else ("degraded" if unsupported else "ok")
     return {"schema": DOCTOR_SCHEMA_ID, "skill": {"id": SKILL_ID, "version": VERSION}, "status": status, "checks": checks,
-            "unavailable_operations": unsupported, "problems": problems, "secrets_shown": False}
+            "unavailable_operations": unsupported, "problems": problems, "warnings": warnings, "secrets_shown": False}
 
 
 def runtime_context(ffmpeg_skill_dir: Optional[str], timeout: float) -> Any:

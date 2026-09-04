@@ -51,6 +51,7 @@ in the tool's generated `input_schema`; a mismatch is a `fail` and `run` refuses
 | MIX per-input pan, more than one bed per call | `--music` takes one file | pairwise fold; no pan |
 | 24-bit intermediates | `.wav` → `pcm_s16le` fixed | 16-bit PCM intermediates |
 | capability detection of core filters (`volume`, `afade`, `amix`, `pan`, `aformat`) | ffmpeg-skill doctor lists only its own table | reported `unknown`, verified per run |
+| filter detection on FFmpeg ≥ 8.0 | ffmpeg-skill 0.9 `_ff_list` matches `[TSC.]{3}`, FFmpeg 8 prints `%c%c` (two flags) → every filter "missing" (observed on macOS CI, brew ffmpeg 8) | when the doctor reports ffmpeg but zero filters, all filter capabilities are `unknown`, not `unsupported`; execution proceeds and output validation decides |
 
 Each gap is a request to ffmpeg-skill (or a future second backend), not something this skill works around with its
 own ffmpeg invocation.

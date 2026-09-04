@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from audio_production.errors import EXIT_CODES
 from conftest import one_json, request_doc, run_cli
 
@@ -125,9 +127,14 @@ def test_noise_reduction(workspace):
     assert d["error"]["code"] == "UNSUPPORTED_OPERATION"
 
 
-def test_format_conversion_of_a_bare_track(workspace):
+def test_format_conversion_of_a_bare_track(workspace, skill_dir):
+    from audio_production.doctor import doctor_report
+    formats = doctor_report(str(skill_dir))["checks"]["output_formats"]
     for fmt in ("m4a", "mp3", "flac", "ogg", "opus"):
         code, d = run(request_doc([], outputs=[{"output_id": "o", "operation": "track:t1", "path": f"out/o.{fmt}", "format": fmt}]))
+        if formats[fmt]["status"] == "unsupported":      # encoder not in this ffmpeg build: the negative path must be explicit
+            assert d["error"]["code"] == "UNSUPPORTED_FORMAT" and d["error"]["details"]["capability"] == formats[fmt]["capability"], (fmt, d.get("error"))
+            continue
         assert d["ok"], (fmt, d.get("error"))
         assert d["outputs"][0]["artifact"]["codec"] == d["plan"]["outputs"][0]["format"].replace("m4a", "aac").replace("ogg", "vorbis")
     # a video container is a declared compatibility gap, not a silent half-result
@@ -258,6 +265,7 @@ def test_timeout_is_a_retryable_tool_error(workspace):
     assert not list(workspace.glob(".audio-production/p1/*.wav")) and not (workspace / "out").exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a console signal cannot be delivered to one child on Windows without also hitting the test runner; SIGBREAK is registered in the CLI but exercised manually")
 def test_signal_cancellation_leaves_no_partial_output(workspace):
     import signal
     import time

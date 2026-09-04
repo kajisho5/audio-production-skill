@@ -145,7 +145,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 skill.cancel()
                 raise KeyboardInterrupt()
 
-            for sig in (signal.SIGINT, signal.SIGTERM):
+            for sig in [signal.SIGINT, signal.SIGTERM] + ([signal.SIGBREAK] if hasattr(signal, "SIGBREAK") else []):  # type: ignore[attr-defined]
                 try:
                     signal.signal(sig, _cancel)
                 except (ValueError, OSError):

@@ -42,10 +42,12 @@ def test_doctor_reports_supported_unsupported_unknown(skill_dir):
     ops = d["checks"]["operations"]
     assert set(ops) == set(OPERATION_TYPES)
     assert all(o["status"] in ("supported", "unsupported", "unknown") for o in ops.values())
-    assert ops["NORMALIZE"]["status"] == "supported" and ops["TRIM"]["status"] == "supported"
+    # FFmpeg >= 8.0 defeats ffmpeg-skill's filter parser: filters are then unknown, never unsupported
+    assert ops["NORMALIZE"]["status"] in ("supported", "unknown") and ops["TRIM"]["status"] == "supported"
+    assert d["checks"]["filter_detection"]["status"] in ("ok", "unknown")
     assert d["checks"]["unsupported_operations"] == UNSUPPORTED_OPERATIONS
     caps = d["checks"]["capabilities"]
-    assert caps["ffmpeg"] == "supported" and caps["filter:loudnorm"] == "supported"
+    assert caps["ffmpeg"] == "supported" and caps["filter:loudnorm"] != "unsupported"
     assert all(v in ("supported", "unsupported", "unknown") for v in caps.values())
     code, out, _ = run_cli(["doctor", "--json", "--ffmpeg-skill", str(skill_dir)])
     assert code == 0 and one_json(out)["status"] == d["status"]
@@ -70,3 +72,8 @@ def test_capability_status_table():
         supported = True
     s = capability_status(Info(), {"ffmpeg": "6.1", "ffprobe": "6.1", "available": ["filter:loudnorm", "encoder:aac"], "missing_optional": ["encoder:libopus"]})
     assert s["filter:loudnorm"] == "supported" and s["encoder:libopus"] == "unsupported" and s["filter:volume"] == "unknown" and s["encoder:pcm_s16le"] == "supported"
+    s = capability_status(Info(), {"ffmpeg": "6.1", "ffprobe": "6.1", "available": ["encoder:aac"], "missing": ["filter:loudnorm"], "missing_optional": ["filter:afftdn", "encoder:libopus"]})
+    assert s["filter:loudnorm"] == "unknown"     # zero filters detected: parser failure, not absence
+    assert s["filter:afftdn"] == "unknown" and s["encoder:libopus"] == "unsupported"
+    s = capability_status(Info(), {"ffmpeg": "6.1", "ffprobe": "6.1", "available": ["filter:silencedetect"], "missing": ["filter:loudnorm"], "missing_optional": []})
+    assert s["filter:loudnorm"] == "unsupported"                                                     # some filters detected: a missing one is really missing
