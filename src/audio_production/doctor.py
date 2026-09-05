@@ -45,6 +45,7 @@ def capability_status(skill_info: Optional[Any], ffdoc: Dict[str, Any]) -> Dict[
     status["ffprobe"] = "supported" if fp_ok else "unsupported"
     available = set(ffdoc.get("available") or [])
     missing = set(ffdoc.get("missing") or []) | set(ffdoc.get("missing_optional") or [])
+    unknown = set(ffdoc.get("unknown") or [])          # ffmpeg-skill >= 0.9.1: listing could not be read
     # ffmpeg-skill's doctor parses `ffmpeg -filters` with a three-flag pattern; FFmpeg >= 8.0 prints two flags, so it
     # reports every filter as missing there. A working ffmpeg always has some of the filters ffmpeg-skill requires, so
     # "ffmpeg present, zero filters detected" means the detection failed, not that the filters are absent.
@@ -54,6 +55,8 @@ def capability_status(skill_info: Optional[Any], ffdoc: Dict[str, Any]) -> Dict[
             status[cap] = "unsupported"
         elif cap in available:
             status[cap] = "supported"
+        elif cap in unknown:
+            status[cap] = "unknown"
         elif cap in missing and not (cap.startswith("filter:") and filters_unreliable):
             status[cap] = "unsupported"
         elif cap == "encoder:pcm_s16le":
@@ -90,6 +93,9 @@ def doctor_report(ffmpeg_skill_dir: Optional[str] = None, workspace: Optional[st
     caps = capability_status(info, ffdoc)
     checks["capabilities"] = caps
     warnings: List[str] = []
+    detection = ffdoc.get("detection") or {}
+    if detection:
+        checks["ffmpeg_skill_detection"] = detection
     if ffdoc.get("ffmpeg") and not any(c.startswith("filter:") for c in ffdoc.get("available") or []):
         checks["filter_detection"] = {"status": "unknown", "detail": "ffmpeg-skill doctor detected no filters at all (its `-filters` parser expects the pre-8.0 three-flag "
                                       "format); filter capabilities are reported unknown and verified per run by output validation"}

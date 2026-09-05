@@ -1,8 +1,9 @@
 # audio-production-skill
 
-Deterministic audio **production / processing** Skill for the AI Video Production Ecosystem: gain, trim, cut,
-silence removal (explicit ranges), fades, EBU R128 loudness normalisation, mix, mono / stereo / surround down-mix,
-FFT noise reduction and format conversion, executed as a typed **operation graph** through
+Deterministic audio **production / processing** Skill for the AI Video Production Ecosystem: gain, sample-accurate
+trim / cut, silence removal (explicit ranges), fades, EBU R128 loudness normalisation, mix, concat, mono / stereo /
+surround down-mix, FFT noise reduction, typed dynamics (gate / compressor / limiter), format conversion and audio
+extraction from video containers, executed as a typed **operation graph** through
 [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill), with validated artifacts and provenance out.
 
 **audio-production-skill is NOT an AI agent.** It contains no LLM, no prompt, no reasoning, no decision, no
@@ -16,15 +17,16 @@ audio-production plan - --json             # dry run: graph, tool selection, exp
 audio-production run - --json              # execute (stdin: request document; stdout: exactly one response document)
 ```
 
-Requirements: Python 3.9+, standard library only; an **ffmpeg-skill** checkout (0.8.4 ≤ version < 1.0, contract 1.0)
-and FFmpeg (`ffmpeg` + `ffprobe`) on PATH for ffmpeg-skill. Install: `pip install -e .`
+Requirements: Python 3.9+, standard library only; an **ffmpeg-skill** checkout (0.9.1 ≤ version < 1.0, contract 1.0;
+0.9.0 is refused because its audio cuts could write AAC packets into `.wav`) and FFmpeg (`ffmpeg` + `ffprobe`) on
+PATH for ffmpeg-skill. Install: `pip install -e .`
 
 ## What it is, and what it is not
 
 | | [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) | [media-analysis-skill](https://github.com/kajisho5/media-analysis-skill) | **audio-production-skill** | [video-production-agent](https://github.com/kajisho5/video-production-agent) |
 |---|---|---|---|---|
 | Role | low-level media execution engine (hands) | measurement / observation (meters) | **audio production execution** (typed audio operations) | reasoning / decision / planning / orchestration (brain) |
-| Does | runs ffmpeg for cut, audio post, loudness, export, … | measures loudness, silence, streams, integrity | executes GAIN / TRIM / CUT / SILENCE_REMOVE / FADE / NORMALIZE / MIX / MONO / STEREO / DOWNMIX / NOISE_REDUCTION as a dependency graph, validates every artifact, records provenance | decides *whether* and *what* to process, builds the request |
+| Does | runs ffmpeg for cut, audio post, loudness, join, export, … | measures loudness, silence, streams, integrity | executes GAIN / TRIM / CUT / SILENCE_REMOVE / FADE / NORMALIZE / MIX / CONCAT / MONO / STEREO / DOWNMIX / NOISE_REDUCTION / DYNAMICS as a dependency graph, validates every artifact, records provenance | decides *whether* and *what* to process, builds the request |
 | Never | holds a project model | edits or writes media | measures for decisions, decides which ranges are silence, invents parameters, runs ffmpeg directly, accepts commands / filters | runs ffmpeg |
 
 - **audio-production-skill ≠ media-analysis-skill.** media-analysis-skill says "silence from 0.0 to 2.0 s, −23.1 LUFS".
@@ -34,7 +36,7 @@ and FFmpeg (`ffmpeg` + `ffprobe`) on PATH for ffmpeg-skill. Install: `pip instal
 - **audio-production-skill ≠ ffmpeg-skill.** ffmpeg-skill runs FFmpeg per script call. audio-production-skill owns the
   *audio project model*: sources, tracks, operation graph with deterministic identities, source ↔ timeline mapping,
   intermediate management, output validation and provenance. It never calls `ffmpeg` itself: every process it starts
-  is `python3 <ffmpeg-skill>/scripts/{probe,audio,cut,loudness}.py` with a typed argv.
+  is `python3 <ffmpeg-skill>/scripts/{probe,audio,cut,loudness,join}.py` with a typed argv.
 - **audio-production-skill ≠ video-production-agent.** There is no Observation → Inference → Decision → ProductionPlan
   here. The agent decides; this skill executes one typed request and says exactly what happened.
 
@@ -51,10 +53,11 @@ audio-production run - --json
    │                             outputs inside the workspace, never an input, never an existing file unless overwrite
    ├─ graph.OperationGraph       nodes (tracks, implicit track range / gain, operations), deterministic topological
    │                             order, cycle / unreachable detection
-   ├─ adapter.FfmpegSkill.probe  every source probed (read-only) and sha256-fingerprinted
+   ├─ adapter.FfmpegSkill.probe  every source probed (read-only) and sha256-fingerprinted; a video container's audio
+   │                             track is extracted to a PCM WAV intermediate (ffmpeg-skill/audio)
    ├─ graph.identities           operation_id = sha256(type, parameters, input identities, tool versions)
    ├─ plan                       tool per node, argv template, expected timeline (segments) and duration
-   ├─ execute (in order)         ffmpeg-skill/{audio,cut,loudness} → PCM WAV intermediate, reused when the identity
+   ├─ execute (in order)         ffmpeg-skill/{audio,cut,loudness,join} → PCM WAV intermediate, reused when the identity
    │                             and input hashes match a manifest; sidecars and partial files removed on failure
    ├─ validate                   exists, size > 0, readable, audio stream, codec, duration ± tolerance, channels,
    │                             sample rate, sha256; NORMALIZE re-measured (loudness / true peak vs. tolerance)
@@ -72,7 +75,7 @@ Full description: [docs/architecture.md](docs/architecture.md).
   `filter:<name>`, `encoder:<name>`. `doctor` reports each as `supported`, `unsupported` or `unknown` (core ffmpeg
   filters are not probed by ffmpeg-skill's doctor and are therefore reported `unknown`, then verified per run).
 - **Tools used** (all through ffmpeg-skill's public contract 1.0): `ffmpeg-skill/probe`, `ffmpeg-skill/audio`,
-  `ffmpeg-skill/cut`, `ffmpeg-skill/loudness`. Which flags are used per tool is listed in `skill --json` →
+  `ffmpeg-skill/cut`, `ffmpeg-skill/loudness`, `ffmpeg-skill/join`. Which flags are used per tool is listed in `skill --json` →
   `ffmpeg_skill.flags_used` and checked against the live ffmpeg-skill contract by `doctor`.
 
 ## Contract
@@ -158,9 +161,9 @@ were skipped. `ok` mirrors the process exit code (0 ⇔ `ok`); `status` follows 
 | type | inputs | parameters | ffmpeg-skill tool | notes |
 |---|---|---|---|---|
 | `GAIN` | 1 | `gain_db` [−60, 60] | `audio --gain` | |
-| `TRIM` | 1 | `start`, `end` (source time) | `cut --start/--end` | keeps [start, end) |
-| `CUT` | 1 | `remove: [{start,end}]` sorted, non-overlapping | `cut --segments` (kept ranges) | |
-| `SILENCE_REMOVE` | 1 | `ranges`, `margin`, `min_duration`, `threshold_db` (recorded) | `cut --segments` | ranges come from the caller |
+| `TRIM` | 1 | `start`, `end` (source time) | `cut --start/--end --accurate` | keeps [start, end); sample-accurate, `measurements.cut.precision` |
+| `CUT` | 1 | `remove: [{start,end}]` sorted, non-overlapping | `cut --segments --accurate` (kept ranges) | sample-accurate |
+| `SILENCE_REMOVE` | 1 | `ranges`, `margin`, `min_duration`, `threshold_db` (recorded) | `cut --segments --accurate` | ranges come from the caller |
 | `FADE_IN` / `FADE_OUT` | 1 | `duration` | `audio --fade-in/--fade-out` | |
 | `NORMALIZE` | 1 | `target_lufs`, `true_peak_db` (required), `loudness_range_lu`, `tolerance_lufs`, `sample_rate`, `profile` | `loudness -I/--tp/--lra/--sample-rate` | two-pass loudnorm, re-measured after |
 | `MIX` | 2..8 | `levels: [{gain_db, mute}]` | `audio --music/--music-volume` (pairwise fold) | duration = first input (amix `duration=first`) |
@@ -168,14 +171,18 @@ were skipped. `ok` mirrors the process exit code (0 ⇔ `ok`); `status` follows 
 | `STEREO` | 1 | – | `audio --stereo` | requires a 1- or 2-channel input |
 | `DOWNMIX` | 1 | – | `audio --downmix` | requires 5.1 / 7.1 |
 | `NOISE_REDUCTION` | 1 | `mode: "fft"`, `strength_db` [10, 60] | `audio --denoise` (afftdn) | the only implemented mode |
+| `DYNAMICS` | 1 | `gate {threshold_db, ratio, attack_ms, release_ms, range_db, knee_db}`, `compressor {threshold_db, ratio, attack_ms, release_ms, makeup_db, knee_db}`, `limiter {ceiling_db, attack_ms, release_ms}` (≥ 1 stage) | `audio --gate/--compress/--limit` (agate, acompressor, alimiter) | fixed order gate → compressor → limiter; omitted fields keep ffmpeg's defaults |
+| `CONCAT` | 2..32 | `crossfade` (s, default 0), `sample_rate`, `channels` (1/2/6/8) | `join --transition none\|fade --duration` (concat / acrossfade) | output layout = widest input unless `channels`; total = Σ − (n−1)·crossfade |
 
 Output formats (`outputs[].format`): `wav` (pcm_s16le), `flac`, `mp3`, `m4a`, `aac`, `ogg`, `opus`; encoder
 availability is reported by `doctor`. Every intermediate is PCM WAV (no generation loss between operations).
 
+Sources may be audio files or video containers (the audio track is extracted first; the output never carries video).
+
 **Declared but not implemented** (`unsupported_operations` in the contract, `UNSUPPORTED_OPERATION` at validation):
-`CONCAT` (ffmpeg-skill/join requires video), `CHANNEL_MAP` (no typed mapping in ffmpeg-skill), `RESAMPLE` as a
-standalone operation (only `NORMALIZE.sample_rate`), `DYNAMICS` (no typed compressor / limiter / gate in ffmpeg-skill),
-`FORMAT_CONVERT` (an output property). Details and the reasons: [docs/ffmpeg-skill.md](docs/ffmpeg-skill.md).
+`CHANNEL_MAP` (no typed mapping in ffmpeg-skill), `RESAMPLE` as a standalone operation (only `NORMALIZE.sample_rate`
+and `CONCAT.sample_rate`), `FORMAT_CONVERT` (an output property). Details and the reasons:
+[docs/ffmpeg-skill.md](docs/ffmpeg-skill.md).
 
 ## CLI
 
@@ -275,8 +282,9 @@ Windows and macOS with a real FFmpeg and a fresh ffmpeg-skill clone: [.github/wo
 `tests/test_integration.py::test_real_audio_pipeline_trim_gain_fade_normalize` runs
 `source → TRIM → GAIN → FADE_OUT → NORMALIZE → output validation` on a generated 6 s / 48 kHz PCM fixture through the
 real ffmpeg-skill and FFmpeg and asserts duration, channels, sample rate, hashes and the re-measured loudness;
-`test_mix_two_sources_then_normalize` runs `A → GAIN, B (range, gain) → MIX → NORMALIZE`. Fixtures are synthesised
-with ffmpeg at test time (the tests may call ffmpeg; the skill never does). Measured on ffmpeg 6.1.1 / ffmpeg-skill 0.9.0.
+`test_mix_two_sources_then_normalize` runs `A → GAIN, B (range, gain) → MIX → NORMALIZE`; `test_concat`, `test_dynamics`
+and the video-container cases cover the 0.9.1 capabilities. Fixtures are synthesised with ffmpeg at test time (the
+tests may call ffmpeg; the skill never does). Measured on ffmpeg 6.1.1 / ffmpeg-skill 0.9.1 (and FFmpeg 8 in CI).
 
 ## Relationship to the other skills
 
@@ -290,11 +298,9 @@ with ffmpeg at test time (the tests may call ffmpeg; the skill never does). Meas
 
 ## Current limitations
 
-- Sources must be audio-only containers (WAV, FLAC, MP3, M4A, OGG, Opus …): a video container is refused
-  (`video_stream_not_supported`) because ffmpeg-skill/audio always maps the video stream into its output.
-- TRIM / CUT precision is ffmpeg-skill/cut's stream-copy precision: boundaries land on packet boundaries (measured
-  about +10–20 ms on PCM WAV and AAC); every artifact's duration is validated within 0.1 s. Sample-accurate cuts
-  need a capability ffmpeg-skill 0.9 does not expose for audio (`--accurate` re-encodes to AAC even into `.wav`).
+- Only the first audio stream of a source is used (no `audio_stream` selection yet).
+- Every artifact's duration is validated within 0.1 s; cuts are sample-accurate, but CONCAT / MIX / export may
+  differ by a codec frame (measured +8–10 ms with AAC sources).
 - Intermediates are 16-bit PCM WAV. MIX output duration follows the first input; per-input pan is not available.
 - Loudness true-peak of a lossy output (`m4a`, `mp3`, …) may exceed the ceiling by the codec's overshoot; the
   verification happens on the PCM intermediate.
@@ -306,10 +312,9 @@ with ffmpeg at test time (the tests may call ffmpeg; the skill never does). Meas
 
 ## Future extensions (not in this release)
 
-Audio-only concat, typed channel mapping, standalone resampling, typed dynamics (compressor / limiter / gate), more
-noise-reduction modes with detected capabilities, audio extraction from video containers, per-input pan in MIX,
-24-bit intermediates — each requires a corresponding capability in ffmpeg-skill's public contract (or a decision to
-add a second execution backend), and will be declared only once implemented and tested.
+Typed channel mapping, standalone resampling, audio-stream selection, more noise-reduction modes with detected
+capabilities, per-input pan in MIX, 24-bit intermediates — each requires a corresponding capability in ffmpeg-skill's
+public contract (or a decision to add a second execution backend), and will be declared only once implemented and tested.
 
 ## License
 

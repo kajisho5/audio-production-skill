@@ -9,8 +9,8 @@ from . import CONTRACT_SCHEMA_VERSION, DOCTOR_SCHEMA_VERSION, PACKAGE_NAME, REQU
 from .adapter import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, SUPPORTED_MAX_EXCLUSIVE, SUPPORTED_MIN, TOOLS_USED
 from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
 from .executor import DURATION_TOLERANCE, TOOL_FOR, WORK_DIR_NAME
-from .model import (CHANNEL_LAYOUTS, FORBIDDEN_KEYS, ID_RE, INTERMEDIATE_FORMAT, MAX_MIX_INPUTS, OPERATION_TYPES, OUTPUT_FORMATS, REF_RE,
-                    REQUEST_SCHEMA_ID, SAMPLE_RATES, UNSUPPORTED_OPERATIONS)
+from .model import (CHANNEL_LAYOUTS, DYNAMICS_STAGES, FORBIDDEN_KEYS, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
+                    OUTPUT_FORMATS, REF_RE, REQUEST_SCHEMA_ID, SAMPLE_RATES, UNSUPPORTED_OPERATIONS)
 
 CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
 
@@ -20,6 +20,10 @@ def _param_schema(ps: Dict[str, Any]) -> Dict[str, Any]:
     if ps["type"] == "ranges":
         out["type"] = "array"
         out["items"] = {"type": "object", "properties": {"start": {"type": "number"}, "end": {"type": "number"}}, "required": ["start", "end"], "additionalProperties": False}
+    if ps["type"] == "stage":
+        out["type"] = "object"
+        out["properties"] = {k: {kk: vv for kk, vv in v.items()} for k, v in DYNAMICS_STAGES[ps["stage"]].items()}
+        out["additionalProperties"] = False
     if ps["type"] == "levels":
         out["type"] = "array"
         out["items"] = {"type": "object", "properties": {"gain_db": {"type": "number", "min": -60, "max": 60}, "mute": {"type": "boolean"}}, "additionalProperties": False}
@@ -33,7 +37,7 @@ def operation_specs() -> List[Dict[str, Any]]:
         out.append({"type": typ, "description": spec["description"], "inputs": {"min": spec["inputs"][0], "max": spec["inputs"][1]},
                     "parameters": {k: _param_schema(v) for k, v in spec["parameters"].items()},
                     "tool": f"ffmpeg-skill/{tool}", "required_capabilities": ["ffmpeg-skill", "ffmpeg", "ffprobe", "encoder:pcm_s16le", *extra],
-                    "keeps_timeline": typ not in ("TRIM", "CUT", "SILENCE_REMOVE", "MIX"), "deterministic": "content_equivalent"})
+                    "keeps_timeline": typ not in ("TRIM", "CUT", "SILENCE_REMOVE", "MIX", "CONCAT"), "deterministic": "content_equivalent"})
     return out
 
 
@@ -48,8 +52,9 @@ def skill_contract() -> Dict[str, Any]:
     return {
         "schema": CONTRACT_SCHEMA_ID, "skill_id": SKILL_ID, "id": SKILL_ID, "name": PACKAGE_NAME, "package": PACKAGE_NAME, "version": VERSION,
         "kind": "execution", "role": "audio production (processing); not measurement, not decision",
-        "description": "Deterministic audio production execution: gain, trim, cut, silence removal (explicit ranges), fades, EBU R128 loudness normalisation, "
-                       "mix, mono/stereo/downmix, FFT noise reduction, format conversion; typed operation graph in, validated artifacts with provenance out. Not an AI agent.",
+        "description": "Deterministic audio production execution: gain, sample-accurate trim / cut, silence removal (explicit ranges), fades, EBU R128 loudness "
+                       "normalisation, mix, concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), format conversion and "
+                       "audio extraction from video containers; typed operation graph in, validated artifacts with provenance out. Not an AI agent.",
         "repository": "https://github.com/kajisho5/audio-production-skill",
         "not_provided": ["AI reasoning", "decisions", "production plans", "loudness or silence measurement for decisions (media-analysis-skill)", "speech recognition",
                          "video editing", "arbitrary ffmpeg filters", "shell execution", "network access"],
@@ -58,14 +63,14 @@ def skill_contract() -> Dict[str, Any]:
         "unsupported_operations": [{"type": t, "status": "not_implemented", "reason": r} for t, r in UNSUPPORTED_OPERATIONS.items()],
         "output_formats": {f: {"extension": s["extension"], "codec": s["codec"], "required_capability": s["capability"], "lossless": s["lossless"]} for f, s in OUTPUT_FORMATS.items()},
         "intermediate_format": {"format": INTERMEDIATE_FORMAT, "codec": OUTPUT_FORMATS[INTERMEDIATE_FORMAT]["codec"], "work_dir": f"<workspace>/{WORK_DIR_NAME}/<project_id>/"},
-        "channel_layouts": sorted(CHANNEL_LAYOUTS), "sample_rates": list(SAMPLE_RATES), "max_mix_inputs": MAX_MIX_INPUTS,
+        "channel_layouts": sorted(CHANNEL_LAYOUTS), "sample_rates": list(SAMPLE_RATES), "max_mix_inputs": MAX_MIX_INPUTS, "max_concat_inputs": MAX_CONCAT_INPUTS,
         "timeline": {"unit": "seconds (float)", "ranges": "half-open [start, end)", "mapping": "every artifact carries segments: timeline range <- source_id + source range",
-                     "precision": f"ffmpeg-skill/cut lands on packet boundaries; artifact duration is validated within {DURATION_TOLERANCE}s"},
+                     "precision": f"TRIM / CUT / SILENCE_REMOVE are sample-accurate (ffmpeg-skill/cut --accurate, precision reported per operation); every artifact duration is validated within {DURATION_TOLERANCE}s"},
         "loudness": {"standard": "EBU R128 / ITU-R BS.1770 via ffmpeg loudnorm (two-pass, linear)", "parameters": ["target_lufs", "true_peak_db", "loudness_range_lu", "tolerance_lufs", "sample_rate", "profile"],
                      "defaults": "none for target / true peak: the caller or profile decides", "measurement_for_decisions": "media-analysis-skill (loudness kind); this skill only verifies its own output"},
         "execution": {"mode": "local", "canonical_invocation": ["audio-production", "run", "-", "--json"], "stdin": REQUEST_SCHEMA_ID,
                       "stdout": f"exactly one {SKILL_ID}/response@{RESPONSE_SCHEMA_VERSION} document", "stderr": "diagnostics only",
-                      "executables": ["python3 <ffmpeg-skill>/scripts/{probe,audio,cut,loudness}.py (argv lists)"], "executable_resolution": "ffmpeg-skill directory: --ffmpeg-skill, AUDIO_PRODUCTION_FFMPEG_SKILL_DIR, VIDEO_AGENT_FFMPEG_SKILL_DIR, ~/.claude/skills/ffmpeg-skill, ./vendor/ffmpeg-skill, ../ffmpeg-skill; ffmpeg/ffprobe: PATH lookup by ffmpeg-skill",
+                      "executables": ["python3 <ffmpeg-skill>/scripts/{probe,audio,cut,loudness,join}.py (argv lists)"], "executable_resolution": "ffmpeg-skill directory: --ffmpeg-skill, AUDIO_PRODUCTION_FFMPEG_SKILL_DIR, VIDEO_AGENT_FFMPEG_SKILL_DIR, ~/.claude/skills/ffmpeg-skill, ./vendor/ffmpeg-skill, ../ffmpeg-skill; ffmpeg/ffprobe: PATH lookup by ffmpeg-skill",
                       "shell": False, "arbitrary_executables": False, "arbitrary_filters": False, "network": False, "input_mutation": False, "ai": False},
         "ffmpeg_skill": {"contract_version": SUPPORTED_CONTRACT_VERSION, "version_window": {"min": ".".join(map(str, SUPPORTED_MIN)), "max_exclusive": ".".join(map(str, SUPPORTED_MAX_EXCLUSIVE))},
                          "tools_used": list(TOOLS_USED), "flags_used": {k: list(v) for k, v in FLAGS_USED.items()}},

@@ -10,7 +10,7 @@ from audio_production.errors import ERROR_CODES, EXIT_CODES, AudioError
 from audio_production.graph import OperationGraph
 from audio_production.model import OPERATION_TYPES, UNSUPPORTED_OPERATIONS, TimeRange, parse_request, validate_parameters
 from audio_production.security import PathPolicy, check_filename
-from audio_production.timeline import apply_silence_rules, base_segments, complement, cut, fade_ranges, mix, total_duration, trim
+from audio_production.timeline import apply_silence_rules, base_segments, complement, concat, cut, fade_ranges, mix, total_duration, trim
 from conftest import request_doc
 
 
@@ -92,6 +92,17 @@ def test_parameter_validation_per_type():
     err(v, "UNSUPPORTED_OPERATION", "NOISE_REDUCTION", {"mode": "ai", "strength_db": 20}, 1, "p")
     err(v, "INVALID_REQUEST", "NOISE_REDUCTION", {"mode": "fft", "strength_db": 5}, 1, "p")
     assert v("MONO", None, 1, "p") == {}
+    dy = v("DYNAMICS", {"compressor": {"threshold_db": -18, "ratio": 3}, "limiter": {"ceiling_db": -1}}, 1, "p")
+    assert dy == {"compressor": {"threshold_db": -18.0, "ratio": 3.0}, "limiter": {"ceiling_db": -1.0}}
+    err(v, "INVALID_REQUEST", "DYNAMICS", {}, 1, "p")                                         # at least one stage
+    err(v, "INVALID_REQUEST", "DYNAMICS", {"compressor": {"ratio": 0.5}}, 1, "p")             # range
+    err(v, "INVALID_REQUEST", "DYNAMICS", {"gate": {"threshold_db": -20, "hold_ms": 5}}, 1, "p")   # unknown field
+    err(v, "INVALID_REQUEST", "DYNAMICS", {"compressor": "fast"}, 1, "p")
+    c = v("CONCAT", {"crossfade": 0.5, "channels": 2}, 3, "p")
+    assert c == {"crossfade": 0.5, "channels": 2}
+    assert v("CONCAT", None, 2, "p") == {"crossfade": 0.0}
+    err(v, "INVALID_REQUEST", "CONCAT", {"channels": 3}, 2, "p")
+    err(v, "INVALID_SAMPLE_RATE", "CONCAT", {"sample_rate": 12345}, 2, "p")
     err(v, "INVALID_REQUEST", "MONO", {"weights": [1, 0]}, 1, "p")
 
 
@@ -144,6 +155,14 @@ def test_silence_rules_are_pure_arithmetic():
     r = apply_silence_rules([TimeRange(0.0, 2.0), TimeRange(5.0, 5.2), TimeRange(5.5, 6.0)], margin=0.15, min_duration=0.4)
     assert [x.to_dict() for x in r] == [{"start": 0.15, "end": 1.85}]
     assert apply_silence_rules([TimeRange(0.0, 0.2)], 0.1, 0.0) == []
+
+
+def test_concat_mapping():
+    c = concat([base_segments("a", 6.0), base_segments("b", 4.0)])
+    assert [(s.source_id, s.timeline_start, s.timeline_end, s.input_index) for s in c] == [("a", 0.0, 6.0, 0), ("b", 6.0, 10.0, 1)]
+    c = concat([base_segments("a", 6.0), base_segments("b", 4.0), base_segments("c", 2.0)], crossfade=0.5)
+    assert [(s.timeline_start, s.timeline_end) for s in c] == [(0.0, 6.0), (5.5, 9.5), (9.0, 11.0)] and total_duration(c) == 11.0
+    err(concat, "INVALID_TIME_RANGE", [base_segments("a", 6.0), base_segments("b", 0.4)], 0.5)
 
 
 def test_mix_and_fade_rules():

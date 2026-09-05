@@ -17,3 +17,6 @@
   `unknown` and verified by output validation, instead of being claimed `supported`.
 - **ADR-8 Generic core.** No conference / speaker / presentation vocabulary in code, contract or schemas; tracks are
   generic (`label` is free text for the caller's domain layer).
+- **ADR-9 Track ffmpeg-skill's contract, not its version number.** 0.9.1 added exactly the capabilities 0.9.0
+  lacked (sample-accurate audio cuts, audio join, typed dynamics, extraction, FFmpeg 8 detection); the skill adopted
+  them the same day and raised its minimum to 0.9.1 instead of keeping work-arounds for 0.9.0's defects.

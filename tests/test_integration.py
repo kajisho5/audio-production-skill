@@ -55,10 +55,16 @@ def test_gain(workspace):
 def test_trim_and_timeline(workspace):
     code, d = run(request_doc([op("t", "TRIM", ["track:t1"], start=1.0, end=4.0)]))
     assert d["ok"], d.get("error")
-    assert abs(probe(workspace / "out" / "main.wav")["duration"] - 3.0) < 0.1
+    assert abs(probe(workspace / "out" / "main.wav")["duration"] - 3.0) < 0.002        # sample-accurate (--accurate)
+    assert results(d)["op:t"]["measurements"]["cut"]["precision"] == "sample"
     seg = results(d)["op:t"]["segments"]
     assert seg == [{"timeline": {"start": 0.0, "end": 3.0}, "source_id": "a", "source": {"start": 1.0, "end": 4.0}, "input_index": 0}]
     assert d["outputs"][0]["segments"] == seg
+    # a compressed source is decoded on the way; still sample-accurate
+    code, d = run(request_doc([op("t", "TRIM", ["track:t1"], start=0.5, end=2.5)], sources=[{"source_id": "a", "path": "stereo.m4a"}]))
+    assert d["ok"] and abs(probe(workspace / "out" / "main.wav")["duration"] - 2.0) < 0.002 and results(d)["op:t"]["measurements"]["cut"]["precision"] == "sample"
+    code, d = run(request_doc([op("t", "TRIM", ["track:t1"], start=0.5, end=2.0)], sources=[{"source_id": "a", "path": "video.mp4"}]))
+    assert d["ok"] and abs(probe(workspace / "out" / "main.wav")["duration"] - 1.5) < 0.002
     code, d = run(request_doc([op("t", "TRIM", ["track:t1"], start=5.0, end=9.0)]))
     assert d["error"]["code"] == "INVALID_TIME_RANGE"
 
@@ -127,6 +133,41 @@ def test_noise_reduction(workspace):
     assert d["error"]["code"] == "UNSUPPORTED_OPERATION"
 
 
+def test_concat(workspace):
+    doc = request_doc([op("k", "CONCAT", ["track:t1", "track:t2"])],
+                      sources=[{"source_id": "a", "path": "tone.wav"}, {"source_id": "b", "path": "stereo.m4a"}],
+                      tracks=[{"track_id": "t1", "source_id": "a"}, {"track_id": "t2", "source_id": "b"}],
+                      outputs=[{"output_id": "main", "operation": "op:k", "path": "out/cat.wav", "format": "wav", "expect": {"channels": 2, "duration": 10.0}}])
+    code, d = run(doc)
+    assert d["ok"], d.get("error")
+    segs = results(d)["op:k"]["segments"]
+    assert [(s["source_id"], s["timeline"]["start"], s["timeline"]["end"], s["input_index"]) for s in segs] == [("a", 0.0, 6.0, 0), ("b", 6.0, 10.0, 1)]
+    assert probe(workspace / "out" / "cat.wav")["channels"] == 2                     # widest input (ffmpeg-skill/join)
+    doc["project"]["operations"][0]["parameters"] = {"crossfade": 1.0, "channels": 1, "sample_rate": 44100}
+    doc["project"]["outputs"][0]["expect"] = {"channels": 1, "duration": 9.0, "sample_rate": 44100}
+    code, d = run(doc)
+    assert d["ok"], d.get("error")
+    assert results(d)["op:k"]["segments"][1]["timeline"] == {"start": 5.0, "end": 9.0}
+    doc["project"]["operations"][0]["parameters"] = {"crossfade": 5.0}
+    code, d = run(doc)
+    assert d["error"]["code"] == "INVALID_TIME_RANGE" and d["error"]["details"]["input_index"] == 1
+    code, d = run(request_doc([op("k", "CONCAT", ["track:t1"])]))
+    assert d["error"]["code"] == "INVALID_REQUEST"
+
+
+def test_dynamics(workspace):
+    code, d = run(request_doc([op("y", "DYNAMICS", ["track:t1"], gate={"threshold_db": -40, "range_db": -30}, compressor={"threshold_db": -20, "ratio": 4, "attack_ms": 5, "release_ms": 80, "makeup_db": 2}, limiter={"ceiling_db": -1, "attack_ms": 5, "release_ms": 50})]))
+    assert d["ok"], d.get("error")
+    r = results(d)["op:y"]
+    assert r["tool"] == "ffmpeg-skill/audio" and abs(r["artifact"]["duration"] - 6.0) < 0.01
+    assert any("agate" in c and "acompressor" in c and "alimiter" in c for c in r["tool_commands_observed"])
+    code, d = run(request_doc([op("y", "DYNAMICS", ["track:t1"], limiter={"ceiling_db": -3})]))
+    assert d["ok"], d.get("error")
+    for bad in ({}, {"compressor": {"ratio": 50}}, {"compressor": {"threshold_db": -20, "filter": "x"}}, {"limiter": {"ceiling_db": "0dB"}}, {"expander": {"ratio": 2}}):
+        code, d = run(request_doc([op("y", "DYNAMICS", ["track:t1"], **bad)]))
+        assert d["ok"] is False and d["error"]["code"] == "INVALID_REQUEST", bad
+
+
 def test_format_conversion_of_a_bare_track(workspace, skill_dir):
     from audio_production.doctor import doctor_report
     formats = doctor_report(str(skill_dir))["checks"]["output_formats"]
@@ -137,9 +178,13 @@ def test_format_conversion_of_a_bare_track(workspace, skill_dir):
             continue
         assert d["ok"], (fmt, d.get("error"))
         assert d["outputs"][0]["artifact"]["codec"] == d["plan"]["outputs"][0]["format"].replace("m4a", "aac").replace("ogg", "vorbis")
-    # a video container is a declared compatibility gap, not a silent half-result
+    # a video container: the audio track is extracted (ffmpeg-skill/audio) and the output has no video stream
     code, d = run(request_doc([], sources=[{"source_id": "a", "path": "video.mp4"}]))
-    assert d["error"]["code"] == "INVALID_INPUT" and d["error"]["details"]["reason"] == "video_stream_not_supported"
+    assert d["ok"], d.get("error")
+    r = results(d)["track:t1"]
+    assert r["tool"] == "ffmpeg-skill/audio" and r["measurements"]["has_video"] is True and r["artifact"]["codec"] == "pcm_s16le"
+    assert probe(workspace / "out" / "main.wav")["codec"] == "pcm_s16le"
+    assert subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(workspace / "out" / "main.wav")], capture_output=True, text=True).stdout.strip() == ""
 
 
 def test_mix_two_sources_then_normalize(workspace):

@@ -1,23 +1,32 @@
 # ffmpeg-skill relationship
 
 audio-production-skill is a client of ffmpeg-skill's **public contract** (`ffmpeg-skill contract --json`,
-`contract_version 1.0`, verified against ffmpeg-skill 0.9.0 at commit `6b71889`). It never calls `ffmpeg` or
-`ffprobe` itself.
+`contract_version 1.0`, verified against ffmpeg-skill 0.9.1 at commit `2abd89c`; 0.9.0 is refused, see below). It
+never calls `ffmpeg` or `ffprobe` itself.
 
 ## Tools and flags used
 
 | ffmpeg-skill tool | used for | flags emitted |
 |---|---|---|
 | `ffmpeg-skill/probe` | source facts, every output validation | positional input |
-| `ffmpeg-skill/audio` | GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, MIX, decode-to-WAV, export | `--gain`, `--fade-in`, `--fade-out`, `--mono`, `--stereo`, `--downmix`, `--denoise`, `--denoise-strength`, `--music`, `--music-volume`, `-o`, `--json` |
-| `ffmpeg-skill/cut` | TRIM, CUT, SILENCE_REMOVE | `--start`, `--end`, `--segments`, `-o`, `--json` |
+| `ffmpeg-skill/audio` | GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, MIX, audio extraction from video, export | `--gain`, `--fade-in`, `--fade-out`, `--mono`, `--stereo`, `--downmix`, `--denoise`, `--denoise-strength`, `--music`, `--music-volume`, `--gate/--gate-*`, `--compress/--comp-*`, `--limit/--limit-*`, `-o`, `--json` |
+| `ffmpeg-skill/cut` | TRIM, CUT, SILENCE_REMOVE | `--start`, `--end`, `--segments`, `--accurate`, `-o`, `--json` |
 | `ffmpeg-skill/loudness` | NORMALIZE and its verification | `-I`, `--tp`, `--lra`, `--sample-rate`, `--measure-only`, `-o`, `--json` |
+| `ffmpeg-skill/join` | CONCAT | positional inputs, `--transition none|fade`, `--duration`, `--sample-rate`, `--channels`, `-o`, `--json` |
 
 `doctor` checks that the located ffmpeg-skill declares these tools with `audio_only: true` and that every flag exists
 in the tool's generated `input_schema`; a mismatch is a `fail` and `run` refuses with `TOOL_ERROR`
 (`ffmpeg_skill_incompatible`).
 
-## Observed behaviour this skill relies on (measured, ffmpeg-skill 0.9.0 / ffmpeg 6.1.1)
+## Why 0.9.1 is the minimum
+
+Measured on 0.9.0: `cut --accurate` and the keyframe fallback re-encoded audio with AAC even into a `.wav`
+container, `cut -c copy` copied compressed packets into `.wav`, `audio.py` always mapped the video stream so a video
+container could not yield an audio-only output, `join` required video, there were no typed dynamics, and the doctor
+reported every filter missing on FFmpeg ≥ 8. 0.9.1 fixes all of these (its CHANGELOG); the adapter's version window
+is therefore `[0.9.1, 1.0.0)`.
+
+## Observed behaviour this skill relies on (measured, ffmpeg-skill 0.9.1 / ffmpeg 6.1.1)
 
 - `audio.py` without processing flags re-encodes the first audio stream to the codec of the output extension
   (`.wav` → `pcm_s16le`, `.flac`, `.mp3` → libmp3lame, `.m4a`/`.aac` → aac, `.ogg` → libvorbis, `.opus` → libopus):
@@ -26,15 +35,18 @@ in the tool's generated `input_schema`; a mismatch is a `fail` and `run` refuses
   layout follows the first input; `-shortest` applies. N-way MIX is realised as a pairwise fold.
 - `audio.py --mono` uses `pan=mono|c0=0.5*c0+0.5*c1`: on a mono input this halves the level, so MONO is refused
   unless the input has exactly 2 channels.
-- `cut.py` stream-copies (`-c copy`); the cut lands on the packet boundary at or after the requested time (measured
-  +17 ms on 48 kHz PCM WAV, +15 ms on AAC). `--accurate` re-encodes with AAC even into a `.wav` container
-  (verified: `acc.wav` contained an AAC stream), so it is never used.
-- `cut.py` on a compressed source copies the compressed packets into the `.wav` container; this skill therefore
-  decodes non-PCM inputs to WAV before cutting.
+- `cut.py --accurate` on audio trims at the sample (`atrim`) and encodes to the codec of the output extension;
+  measured `precision: sample`, `duration_error_ms: 0.0` on WAV, AAC and video-container sources. This skill always
+  passes `--accurate` and records `precision` / `duration_error_ms` / `reencoded` in `measurements.cut`.
+- `join.py` with audio-only inputs concatenates at one sample rate (first clip's or `--sample-rate`) and one layout
+  (widest or `--channels`), with `acrossfade` (`--transition fade --duration`) or a butt join (`--transition none`);
+  audio and video inputs cannot be mixed, so video-container sources are extracted first.
+- `audio.py --gate/--compress/--limit` build `agate`, `acompressor`, `alimiter` from range-checked numbers (dB
+  converted to linear by ffmpeg-skill); order gate → compressor → limiter.
+- `audio.py <video> -o x.wav` drops the picture and extracts the first audio track; this is how SOURCE_TRACK nodes
+  of video containers are materialised.
 - `loudness.py` refuses silent inputs (`input audio is silent`) → `TOOL_ERROR`; `--measure-only` prints
   `{input_i, input_tp, input_lra, input_thresh, target_offset}` as strings.
-- `audio.py` always maps `0:v:0` when the input has video, which the `.wav` muxer rejects → video containers are
-  refused at source validation (`video_stream_not_supported`).
 - Failure document: `{"status": "failed", "error": {"kind": "input|ffmpeg|missing_tool", "message"}}` with a non-zero
   exit; parsed into `TOOL_ERROR` with `details.error_kind`.
 
@@ -42,12 +54,9 @@ in the tool's generated `input_schema`; a mismatch is a `fail` and `run` refuses
 
 | wanted operation | missing in ffmpeg-skill 0.9 public contract | consequence |
 |---|---|---|
-| CONCAT of separate audio files | `join` is `video_required`; `cut --segments` only joins ranges of one input | `CONCAT` declared `not_implemented` |
 | CHANNEL_MAP (arbitrary mapping / pan) | only `--mono`, `--stereo`, `--downmix` | provided as MONO / STEREO / DOWNMIX; `CHANNEL_MAP` not implemented |
-| RESAMPLE (standalone) | `audio.py` has no sample-rate flag; only `loudness.py --sample-rate` | `NORMALIZE.sample_rate`; `RESAMPLE` not implemented; outputs may declare `expect.sample_rate` for verification |
-| DYNAMICS (typed compressor / limiter / gate) | only the fixed `--voice` chain | not implemented |
-| sample-accurate TRIM / CUT of audio | `--accurate` breaks audio-only outputs | packet-boundary precision, validated within 0.1 s |
-| audio extraction from a video container | `audio.py` maps the video stream, `cut.py` copies it | video sources refused |
+| RESAMPLE (standalone) | `audio.py` has no sample-rate flag; only `loudness.py --sample-rate` and `join.py --sample-rate` | `NORMALIZE.sample_rate`, `CONCAT.sample_rate`; `RESAMPLE` not implemented; outputs may declare `expect.sample_rate` for verification |
+| audio stream selection | only `audio.py --audio-stream`; `cut.py` / `loudness.py` / `join.py` take the first stream | first audio stream only (follow-up) |
 | MIX per-input pan, more than one bed per call | `--music` takes one file | pairwise fold; no pan |
 | 24-bit intermediates | `.wav` → `pcm_s16le` fixed | 16-bit PCM intermediates |
 | capability detection of core filters (`volume`, `afade`, `amix`, `pan`, `aformat`) | ffmpeg-skill doctor lists only its own table | reported `unknown`, verified per run |

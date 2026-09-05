@@ -37,7 +37,8 @@ Source time and timeline time are separate. A track over a 6 s source starts as 
 `[1,2) ← [3,4)`. Gain / fades / normalisation / channel operations keep the mapping. MIX keeps every input's segments
 tagged with `input_index`, clipped to the first input's duration. Every artifact and every output therefore carries
 `output → operation → source → source range`. `SILENCE_REMOVE` applies `margin` and `min_duration` arithmetic to the
-caller's ranges first (`measurements.effective_ranges` records the result).
+caller's ranges first (`measurements.effective_ranges` records the result). CONCAT places inputs one after another,
+each shifted back by the crossfade, so overlapping parts carry both mappings (`input_index`).
 
 ## Operation graph and identity
 
@@ -50,16 +51,18 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
 
 ## Execution (`executor.py`)
 
-1. Probe every source through `ffmpeg-skill/probe` (also under dry run: read-only), refuse no-audio and video
-   containers, fingerprint (sha256).
+1. Probe every source through `ffmpeg-skill/probe` (also under dry run: read-only), refuse sources without audio,
+   fingerprint (sha256). A video container's SOURCE_TRACK node is executed as an extraction (`ffmpeg-skill/audio`
+   to PCM WAV); an audio file's SOURCE_TRACK is the file itself.
 2. Resolve outputs (workspace, collisions, existence), the work directory `<workspace>/.audio-production/<project_id>/`.
 3. Plan every node: tool selection (`TOOL_FOR`), capability check against the doctor's statuses, expected segments.
    `plan` / `--dry-run` stops here and returns the plan and planned results.
 4. Execute in topological order. Each node writes one PCM WAV intermediate named `<identity[:16]>.wav` next to a
    manifest `<identity[:16]>.json`; if both exist, the manifest matches the identity and input hashes and the file's
-   sha256 matches, the node is `reused`. A non-PCM input of TRIM / CUT / SILENCE_REMOVE is decoded to a `.decode.wav`
-   sidecar first (ffmpeg-skill/cut stream-copies). MIX folds pairwise through `ffmpeg-skill/audio --music` with
-   `.mixN.wav` sidecars. Sidecars are always removed; on failure the intermediate is removed too.
+   sha256 matches, the node is `reused`. TRIM / CUT / SILENCE_REMOVE run `ffmpeg-skill/cut --accurate` (sample
+   precision, recorded in `measurements.cut`). MIX folds pairwise through `ffmpeg-skill/audio --music` with `.mixN.wav`
+   sidecars; CONCAT is one `ffmpeg-skill/join` call; DYNAMICS one `ffmpeg-skill/audio` call with typed flags.
+   Sidecars are always removed; on failure the intermediate is removed too.
 5. Validate every intermediate: exists, size > 0, readable, probed audio stream, codec `pcm_s16le`, duration within
    0.1 s of the expected timeline, channel count as derived from the graph, requested sample rate. NORMALIZE outputs
    are re-measured with `ffmpeg-skill/loudness --measure-only`; with `tolerance_lufs` set, an off-target result is a
@@ -90,4 +93,4 @@ process exit code is `0` iff `ok`, else `errors.EXIT_CODES[code]`.
 - Document schemas: `audio-production/{contract,request,response,doctor}@1`, versioned independently; within `@1`
   changes are additive only. Renaming an operation type, a parameter, or changing how an operation is realised bumps
   the minor package version (and therefore every operation identity, by design).
-- ffmpeg-skill compatibility window: contract `1.0`, version `[0.8.4, 1.0.0)`; checked at every run and by `doctor`.
+- ffmpeg-skill compatibility window: contract `1.0`, version `[0.9.1, 1.0.0)`; checked at every run and by `doctor`.

@@ -11,9 +11,10 @@
 
 Which ffmpeg-skill tools are used, and for what (docs/ffmpeg-skill.md):
   probe     input facts and output validation
-  audio     GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, MIX (--music), format conversion
-  cut       TRIM (--start/--end), CUT / SILENCE_REMOVE (--segments = kept ranges)
-  loudness  NORMALIZE (-I/--tp/--lra/--sample-rate) and --measure-only for verification"""
+  audio     GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, MIX (--music), format conversion / extraction
+  cut       TRIM (--start/--end), CUT / SILENCE_REMOVE (--segments = kept ranges), always --accurate (sample precision)
+  loudness  NORMALIZE (-I/--tp/--lra/--sample-rate) and --measure-only for verification
+  join      CONCAT (--transition none | fade --duration, --sample-rate, --channels)"""
 from __future__ import annotations
 
 import json
@@ -30,16 +31,20 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .errors import AudioError
 
 SUPPORTED_CONTRACT_VERSION = "1.0"
-SUPPORTED_MIN = (0, 8, 4)
+SUPPORTED_MIN = (0, 9, 1)     # 0.9.0 wrote AAC packets into .wav on audio cuts and could not extract audio from video
 SUPPORTED_MAX_EXCLUSIVE = (1, 0, 0)
 ENV_DIR_KEYS = ("AUDIO_PRODUCTION_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
-TOOLS_USED = ("probe", "audio", "cut", "loudness")
+TOOLS_USED = ("probe", "audio", "cut", "loudness", "join")
 # flags of the ffmpeg-skill input_schema this adapter emits; checked against the live contract in doctor
 FLAGS_USED: Dict[str, Tuple[str, ...]] = {
     "probe": ("inputs",),
-    "audio": ("input", "output", "gain", "fade_in", "fade_out", "mono", "stereo", "downmix", "denoise", "denoise_strength", "music", "music_volume", "json"),
+    "audio": ("input", "output", "gain", "fade_in", "fade_out", "mono", "stereo", "downmix", "denoise", "denoise_strength", "music", "music_volume", "json",
+              "compress", "comp_threshold", "comp_ratio", "comp_attack", "comp_release", "comp_makeup", "comp_knee",
+              "limit", "limit_ceiling", "limit_attack", "limit_release",
+              "gate", "gate_threshold", "gate_ratio", "gate_attack", "gate_release", "gate_range", "gate_knee"),
     "cut": ("input", "output", "start", "end", "segments", "accurate", "json"),
     "loudness": ("input", "output", "lufs", "tp", "lra", "sample_rate", "measure_only", "json"),
+    "join": ("inputs", "output", "transition", "duration", "sample_rate", "channels", "json"),
 }
 _ENV_KEEP = ("PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TERM",
              "SYSTEMROOT", "SYSTEMDRIVE", "PATHEXT", "COMSPEC", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA")
@@ -184,7 +189,7 @@ class FfmpegSkill:
             missing = [f for f in flags if f not in props]
             if missing:
                 problems.append(f"ffmpeg-skill/{tool} lacks flag(s) {missing}")
-            if tool in ("audio", "cut", "loudness") and spec.get("audio_only") is not True:
+            if tool in ("audio", "cut", "loudness", "join") and spec.get("audio_only") is not True:
                 problems.append(f"ffmpeg-skill/{tool} does not declare audio_only")
         self._info = SkillInfo(self.directory, version, contract_version, tools, problems)
         return self._info

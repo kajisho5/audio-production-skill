@@ -119,6 +119,22 @@ def mix(inputs: List[List[AudioSegment]]) -> List[AudioSegment]:
     return out
 
 
+def concat(inputs: List[List[AudioSegment]], crossfade: float = 0.0) -> List[AudioSegment]:
+    """Inputs placed one after another; with a crossfade each clip starts `crossfade` seconds before the previous one
+    ends (ffmpeg acrossfade), so the total is sum(durations) - (n-1)*crossfade. Every input must be longer than the
+    crossfade (INVALID_TIME_RANGE otherwise); overlapping parts keep both mappings, tagged with input_index."""
+    out: List[AudioSegment] = []
+    offset = 0.0
+    for idx, segs in enumerate(inputs):
+        d = total_duration(segs)
+        if crossfade > 0 and d <= crossfade + EPS:
+            raise AudioError("INVALID_TIME_RANGE", f"CONCAT: input {idx} ({d:.3f}s) is not longer than the crossfade ({crossfade}s)", {"input_index": idx, "duration": d, "crossfade": crossfade})
+        for s in segs:
+            out.append(AudioSegment(offset + s.timeline_start, offset + s.timeline_end, s.source_id, s.source_start, s.source_end, idx))
+        offset += d - (crossfade if idx < len(inputs) - 1 else 0.0)
+    return out
+
+
 def fade_ranges(segments: List[AudioSegment], fade_in: Optional[float], fade_out: Optional[float]) -> None:
     total = total_duration(segments)
     for name, d in (("FADE_IN", fade_in), ("FADE_OUT", fade_out)):

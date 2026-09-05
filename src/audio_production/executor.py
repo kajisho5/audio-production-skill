@@ -23,11 +23,11 @@ from .errors import AudioError
 from .graph import Node, OperationGraph
 from .model import CHANNEL_LAYOUTS, INTERMEDIATE_FORMAT, OUTPUT_FORMATS, AudioRequest, TimeRange, parse_request
 from .security import PathPolicy
-from .timeline import AudioSegment, apply_silence_rules, base_segments, complement, cut, fade_ranges, mix, total_duration, trim
+from .timeline import AudioSegment, apply_silence_rules, base_segments, complement, concat, cut, fade_ranges, mix, total_duration, trim
 
 RESPONSE_SCHEMA_ID = f"{SKILL_ID}/response@{RESPONSE_SCHEMA_VERSION}"
 WORK_DIR_NAME = ".audio-production"
-DURATION_TOLERANCE = 0.1     # seconds; ffmpeg-skill/cut lands on packet boundaries (measured about +17 ms on 48 kHz PCM)
+DURATION_TOLERANCE = 0.1     # seconds; cuts are sample-accurate (--accurate), join / mix / export may differ by a codec frame
 MANIFEST_SCHEMA = f"{SKILL_ID}/manifest@1"
 
 # tool selection per node type (ffmpeg-skill tool, extra capabilities beyond ffmpeg/ffprobe)
@@ -45,6 +45,8 @@ TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
     "STEREO": ("audio", ["filter:aformat"]),
     "DOWNMIX": ("audio", ["filter:pan"]),
     "NOISE_REDUCTION": ("audio", ["filter:afftdn"]),
+    "DYNAMICS": ("audio", ["filter:acompressor", "filter:alimiter", "filter:agate"]),
+    "CONCAT": ("join", ["filter:acrossfade"]),
     "EXPORT": ("audio", []),
 }
 
@@ -141,11 +143,6 @@ class Executor:
             audio = meta.get("audio")
             if not audio or not audio.get("channels"):
                 raise AudioError("INVALID_INPUT", f"source {s.source_id!r} has no audio stream", {"source_id": s.source_id, "reason": "no_audio_stream"})
-            if meta.get("video"):
-                # compatibility gap: ffmpeg-skill/audio always maps the video stream into its output, so an audio-only
-                # artifact cannot be produced from a video container through ffmpeg-skill 0.9 (docs/ffmpeg-skill.md)
-                raise AudioError("INVALID_INPUT", f"source {s.source_id!r} contains a video stream; audio-production-skill accepts audio-only sources "
-                                 "(extract the audio track first; ffmpeg-skill has no audio-extraction tool)", {"source_id": s.source_id, "reason": "video_stream_not_supported"})
             duration = float(meta.get("duration") or 0.0)
             if duration <= 0:
                 raise AudioError("INVALID_INPUT", f"source {s.source_id!r} has no positive duration", {"source_id": s.source_id, "reason": "no_duration"})
@@ -245,7 +242,12 @@ class Executor:
                 raise AudioError("INVALID_CHANNEL_LAYOUT", f"track {node.track.track_id!r} expects {layout} ({CHANNEL_LAYOUTS[layout]} ch) but the source has {src['channels']} channel(s)",  # type: ignore[union-attr]
                                  {"track_id": node.track.track_id, "expected": layout, "channels": src["channels"]})  # type: ignore[union-attr]
             st.segments = base_segments(src["source_id"], src["duration"])
-            st.measurements = {"channels": src["channels"], "sample_rate": src["sample_rate"], "duration": src["duration"]}
+            st.measurements = {"channels": src["channels"], "sample_rate": src["sample_rate"], "duration": src["duration"], "has_video": src["has_video"]}
+            if src["has_video"]:
+                # a video container: the audio track is extracted to a PCM WAV intermediate (ffmpeg-skill/audio drops
+                # the picture for an audio output extension, >= 0.9.1) so every consumer sees an audio-only artifact
+                st.tool, st.capabilities = self._select_tool(Node(node.node_id, "EXPORT", []))
+                st.tool = "audio"
             return
         where = f"operation {node.node_id}"
         if node.type == "TRIM":
@@ -263,6 +265,8 @@ class Executor:
             st.segments = mix([i.segments for i in ins])
             if all(lv["mute"] for lv in p["levels"]):
                 raise AudioError("INVALID_REQUEST", f"{where}: every MIX input is muted", {"node_id": node.node_id})
+        elif node.type == "CONCAT":
+            st.segments = concat([i.segments for i in ins], p.get("crossfade", 0.0))
         elif node.type in ("MONO", "STEREO", "DOWNMIX"):
             ch = self._expected_channels(states, ins[0], sources)
             if node.type == "MONO" and ch != 2:
@@ -284,6 +288,10 @@ class Executor:
             return 1
         if node.type in ("STEREO", "DOWNMIX"):
             return 2
+        if node.type == "CONCAT":
+            if "channels" in node.parameters:
+                return int(node.parameters["channels"])
+            return max(self._expected_channels(states, states[i], sources) for i in node.inputs)   # ffmpeg-skill/join: widest clip
         return self._expected_channels(states, states[node.inputs[0]], sources)
 
     def _plan_document(self, graph: OperationGraph, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], outputs: Dict[str, Path],
@@ -294,7 +302,7 @@ class Executor:
                 "sources": {k: {kk: vv for kk, vv in v.items()} for k, v in sources.items()},
                 "steps": [{"node_id": n, "operation_id": states[n].identity, "type": states[n].node.type, "tool": f"ffmpeg-skill/{states[n].tool}",
                            "inputs": list(states[n].node.inputs), "parameters": states[n].node.parameters, "intermediate": str(self._intermediate_path(work_dir, states[n])),
-                           "expected_duration": round(total_duration(states[n].segments), 6)} for n in graph.order if states[n].node.type != "SOURCE_TRACK"],
+                           "expected_duration": round(total_duration(states[n].segments), 6)} for n in graph.order if states[n].node.type != "SOURCE_TRACK" or states[n].tool == "audio"],
                 "outputs": [{"output_id": o.output_id, "node_id": graph.output_nodes[o.output_id], "path": str(outputs[o.output_id]), "format": o.format,
                              "tool": "ffmpeg-skill/audio", "required_capabilities": [OUTPUT_FORMATS[o.format]["capability"]], "expect": o.expect,
                              "expected_duration": round(total_duration(states[graph.output_nodes[o.output_id]].segments), 6)} for o in project.outputs],
@@ -309,35 +317,32 @@ class Executor:
     def sidecars(out_path: Path) -> List[Path]:
         """Temporary files a node may create next to its intermediate (decoded copy, MIX fold steps)."""
         base = str(out_path)[:-4]
-        return [Path(f"{base}.decode.wav")] + [Path(f"{base}.mix{k}.wav") for k in range(1, 8)]
+        return [Path(f"{base}.mix{k}.wav") for k in range(1, 8)]
 
     def _argv(self, st: NodeState, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], out_path: Path) -> List[Tuple[str, List[str]]]:
         """One or more ffmpeg-skill invocations (tool, argv without the script and --json) for this node. Every value
         is a formatted number or a resolved absolute path; nothing from the request is passed through verbatim."""
         node, p = st.node, st.node.parameters
+        o = str(out_path)
+        if node.type == "SOURCE_TRACK":      # extraction of the audio track of a video container
+            return [("audio", [sources[node.track.source_id]["path"], "-o", o])]  # type: ignore[union-attr]
         if not node.inputs:
             raise AudioError("INTERNAL_ERROR", f"{node.type} has no inputs")
         src: str = self._artifact_path(states[node.inputs[0]], sources)
-        o = str(out_path)
         if node.type == "GAIN":
             return [("audio", [src, "--gain", fmt_db(p["gain_db"]), "-o", o])]
         if node.type in ("TRIM", "CUT", "SILENCE_REMOVE"):
-            # ffmpeg-skill/cut stream-copies; a compressed source would be copied verbatim into the .wav container,
-            # so a non-PCM input is decoded to WAV first (ffmpeg-skill/audio pass-through)
-            pre: List[Tuple[str, List[str]]] = []
+            # ffmpeg-skill/cut --accurate: sample-accurate re-encode (atrim) to PCM WAV; a compressed or video-container
+            # source is decoded on the way (ffmpeg-skill >= 0.9.1)
             first = states[node.inputs[0]]
-            if first.artifact is None or first.artifact.codec != OUTPUT_FORMATS[INTERMEDIATE_FORMAT]["codec"]:
-                dec = f"{o[:-4]}.decode.wav"
-                pre.append(("audio", [src, "-o", dec]))
-                src = dec
             if node.type == "TRIM":
-                return pre + [("cut", [src, "--start", fmt_seconds(p["start"]), "--end", fmt_seconds(p["end"]), "-o", o])]
+                return [("cut", [src, "--start", fmt_seconds(p["start"]), "--end", fmt_seconds(p["end"]), "--accurate", "-o", o])]
             total = total_duration(first.segments)
             rem = [TimeRange(r["start"], r["end"]) for r in (p["remove"] if node.type == "CUT" else st.measurements.get("effective_ranges", []))]
             keep = complement(rem, total) if rem else [TimeRange(0.0, total)]
             if len(keep) == 1:
-                return pre + [("cut", [src, "--start", fmt_seconds(keep[0].start), "--end", fmt_seconds(keep[0].end), "-o", o])]
-            return pre + [("cut", [src, "--segments", ",".join(f"{fmt_seconds(k.start)}-{fmt_seconds(k.end)}" for k in keep), "-o", o])]
+                return [("cut", [src, "--start", fmt_seconds(keep[0].start), "--end", fmt_seconds(keep[0].end), "--accurate", "-o", o])]
+            return [("cut", [src, "--segments", ",".join(f"{fmt_seconds(k.start)}-{fmt_seconds(k.end)}" for k in keep), "--accurate", "-o", o])]
         if node.type == "FADE_IN":
             return [("audio", [src, "--fade-in", fmt_seconds(p["duration"]), "-o", o])]
         if node.type == "FADE_OUT":
@@ -357,6 +362,24 @@ class Executor:
             return [("audio", [src, "--downmix", "-o", o])]
         if node.type == "NOISE_REDUCTION":
             return [("audio", [src, "--denoise", "--denoise-strength", fmt_db(p["strength_db"]), "-o", o])]
+        if node.type == "DYNAMICS":
+            args = [src]
+            for stage, flag, prefix in (("gate", "--gate", "gate"), ("compressor", "--compress", "comp"), ("limiter", "--limit", "limit")):
+                if stage not in p:
+                    continue
+                args.append(flag)
+                for key, value in sorted(p[stage].items()):
+                    args += [f"--{prefix}-{key.replace('_db', '').replace('_ms', '')}", fmt_db(value) if key.endswith("_db") else fmt_seconds(value)]
+            return [("audio", args + ["-o", o])]
+        if node.type == "CONCAT":
+            args = [self._artifact_path(states[i], sources) for i in node.inputs]
+            xf = p.get("crossfade", 0.0)
+            args += ["--transition", "fade", "--duration", fmt_seconds(xf)] if xf > 0 else ["--transition", "none"]
+            if "sample_rate" in p:
+                args += ["--sample-rate", str(int(p["sample_rate"]))]
+            if "channels" in p:
+                args += ["--channels", str(int(p["channels"]))]
+            return [("join", args + ["-o", o])]
         if node.type == "MIX":
             # pairwise fold through ffmpeg-skill/audio --music (main + one bed per call); intermediates next to the output
             live = [(self._artifact_path(states[i], sources), lv["gain_db"]) for i, lv in zip(node.inputs, p["levels"]) if not lv["mute"]]
@@ -375,7 +398,7 @@ class Executor:
         raise AudioError("INTERNAL_ERROR", f"no argv builder for {node.type}")
 
     def _artifact_path(self, st: NodeState, sources: Dict[str, Dict[str, Any]]) -> str:
-        if st.node.type == "SOURCE_TRACK":
+        if st.node.type == "SOURCE_TRACK" and st.artifact is None:
             return sources[st.node.track.source_id]["path"]  # type: ignore[union-attr]
         if st.artifact is None:
             raise AudioError("DEPENDENCY_ERROR", f"input {st.node.node_id!r} has no artifact (status {st.status})", {"node_id": st.node.node_id})
@@ -384,7 +407,7 @@ class Executor:
     def _execute_node(self, states: Dict[str, NodeState], st: NodeState, sources: Dict[str, Dict[str, Any]], work_dir: Path, timeout: Optional[float], reuse: bool) -> None:
         node = st.node
         st.input_hashes = [sources[node.track.source_id]["sha256"]] if node.type == "SOURCE_TRACK" else [states[i].artifact.sha256 if states[i].artifact else sources[states[i].node.track.source_id]["sha256"] for i in node.inputs]  # type: ignore[union-attr]
-        if node.type == "SOURCE_TRACK":
+        if node.type == "SOURCE_TRACK" and not sources[node.track.source_id]["has_video"]:  # type: ignore[union-attr]
             src = sources[node.track.source_id]  # type: ignore[union-attr]
             st.artifact = Artifact(Path(src["path"]), src["duration"], src["channels"], src["sample_rate"], src["codec"], src["size"], src["sha256"], src["channel_layout"])
             st.status = "completed"
@@ -402,6 +425,8 @@ class Executor:
                 run = self.skill.run_tool(tool, args, timeout)
                 st.seconds += run.seconds
                 st.tool_commands += run.commands
+                if tool == "cut" and isinstance(run.data.get("precision"), str):
+                    st.measurements["cut"] = {"precision": run.data["precision"], "duration_error_ms": run.data.get("duration_error_ms"), "reencoded": run.data.get("reencoded")}
             st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources))
             if node.type == "NORMALIZE":
                 self._verify_loudness(st, timeout)

@@ -45,11 +45,38 @@ SAMPLE_RATES = (8000, 11025, 16000, 22050, 24000, 32000, 44100, 48000, 88200, 96
 
 MAX_DURATION = 24 * 3600.0
 MAX_MIX_INPUTS = 8
+MAX_CONCAT_INPUTS = 32
 MAX_RANGES = 10000
 MAX_OPERATIONS = 1000
 
 # ---- parameter schemas: name -> {type, required, min, max, enum, description}
-_NUM, _INT, _BOOL, _STR, _RANGES, _LEVELS = "number", "integer", "boolean", "string", "ranges", "levels"
+_NUM, _INT, _BOOL, _STR, _RANGES, _LEVELS, _STAGE = "number", "integer", "boolean", "string", "ranges", "levels", "stage"
+
+# typed dynamics stages (ffmpeg-skill/audio --compress / --limit / --gate; each field is one documented option of
+# acompressor / alimiter / agate, range-checked by ffmpeg-skill again before ffmpeg runs)
+DYNAMICS_STAGES: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "compressor": {
+        "threshold_db": {"type": _NUM, "min": -60.0, "max": 0.0, "description": "dBFS above which gain is reduced"},
+        "ratio": {"type": _NUM, "min": 1.0, "max": 20.0, "description": "compression ratio"},
+        "attack_ms": {"type": _NUM, "min": 0.01, "max": 2000.0, "description": "attack in ms"},
+        "release_ms": {"type": _NUM, "min": 0.01, "max": 9000.0, "description": "release in ms"},
+        "makeup_db": {"type": _NUM, "min": 0.0, "max": 36.0, "description": "make-up gain in dB"},
+        "knee_db": {"type": _NUM, "min": 1.0, "max": 8.0, "description": "knee width in dB"},
+    },
+    "limiter": {
+        "ceiling_db": {"type": _NUM, "min": -24.0, "max": 0.0, "description": "look-ahead limiter ceiling in dBFS"},
+        "attack_ms": {"type": _NUM, "min": 0.1, "max": 80.0, "description": "attack in ms"},
+        "release_ms": {"type": _NUM, "min": 1.0, "max": 8000.0, "description": "release in ms"},
+    },
+    "gate": {
+        "threshold_db": {"type": _NUM, "min": -60.0, "max": 0.0, "description": "dBFS below which the gate closes"},
+        "ratio": {"type": _NUM, "min": 1.0, "max": 9000.0, "description": "gate ratio"},
+        "attack_ms": {"type": _NUM, "min": 0.01, "max": 9000.0, "description": "attack in ms"},
+        "release_ms": {"type": _NUM, "min": 0.01, "max": 9000.0, "description": "release in ms"},
+        "range_db": {"type": _NUM, "min": -90.0, "max": 0.0, "description": "attenuation when closed in dB"},
+        "knee_db": {"type": _NUM, "min": 1.0, "max": 8.0, "description": "knee width in dB"},
+    },
+}
 
 OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
     "GAIN": {"description": "Apply a fixed gain in dB", "inputs": (1, 1), "parameters": {
@@ -83,14 +110,20 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
     "NOISE_REDUCTION": {"description": "FFT noise reduction (ffmpeg afftdn, adaptive noise tracking)", "inputs": (1, 1), "parameters": {
         "mode": {"type": _STR, "required": True, "enum": ["fft"], "description": "only 'fft' (afftdn) is implemented"},
         "strength_db": {"type": _NUM, "required": True, "min": 10.0, "max": 60.0, "description": "noise floor to remove in dB"}}},
+    "DYNAMICS": {"description": "Typed dynamics: gate -> compressor -> limiter (fixed order); at least one stage", "inputs": (1, 1), "parameters": {
+        "compressor": {"type": _STAGE, "required": False, "stage": "compressor", "description": "acompressor parameters (omitted fields keep ffmpeg's defaults, recorded by ffmpeg-skill)"},
+        "limiter": {"type": _STAGE, "required": False, "stage": "limiter", "description": "alimiter parameters"},
+        "gate": {"type": _STAGE, "required": False, "stage": "gate", "description": "agate parameters"}}},
+    "CONCAT": {"description": "Concatenate 2..32 inputs in order (ffmpeg concat), optional equal-power crossfade", "inputs": (2, MAX_CONCAT_INPUTS), "parameters": {
+        "crossfade": {"type": _NUM, "required": False, "min": 0.0, "max": 30.0, "default": 0.0, "description": "seconds of acrossfade between clips (0 = butt join)"},
+        "sample_rate": {"type": _INT, "required": False, "enum": list(SAMPLE_RATES), "description": "output sample rate (omit: the first input's)"},
+        "channels": {"type": _INT, "required": False, "enum": [1, 2, 6, 8], "description": "output channel count (omit: the widest input)"}}},
 }
 
 # declared, not implemented: ffmpeg-skill's public contract has no tool for them (docs/ffmpeg-skill.md)
 UNSUPPORTED_OPERATIONS: Dict[str, str] = {
-    "CONCAT": "ffmpeg-skill/join requires a video stream; no audio-only concatenation tool exists in ffmpeg-skill 0.9",
     "CHANNEL_MAP": "ffmpeg-skill exposes no typed channel mapping (only --mono / --stereo / --downmix, provided as MONO / STEREO / DOWNMIX)",
-    "RESAMPLE": "ffmpeg-skill/audio has no sample-rate flag; only ffmpeg-skill/loudness --sample-rate exists (provided as NORMALIZE.sample_rate)",
-    "DYNAMICS": "ffmpeg-skill has no typed compressor / limiter / gate parameters (only the fixed --voice chain)",
+    "RESAMPLE": "ffmpeg-skill/audio has no sample-rate flag; only loudness --sample-rate and join --sample-rate exist (provided as NORMALIZE.sample_rate and CONCAT.sample_rate)",
     "FORMAT_CONVERT": "format conversion is an AudioOutput property (outputs[].format), not an operation",
 }
 
@@ -279,6 +312,12 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
             out[name] = [r.to_dict() for r in _ranges(v, w)]
         elif t == _LEVELS:
             out[name] = _levels(v, w, n_inputs)
+        elif t == _STAGE:
+            spec_stage = DYNAMICS_STAGES[ps["stage"]]
+            sd = _obj(v, w, tuple(spec_stage), ())
+            out[name] = {k: _number(sd[k], f"{w}.{k}", spec_stage[k]["min"], spec_stage[k]["max"]) for k in spec_stage if k in sd}
+    if op_type == "DYNAMICS" and not any(k in out for k in ("compressor", "limiter", "gate")):
+        raise AudioError("INVALID_REQUEST", f"{where}: DYNAMICS needs at least one of compressor, limiter, gate", {"field": where})
     if op_type == "TRIM" and out["end"] <= out["start"]:
         raise AudioError("INVALID_TIME_RANGE", f"{where}: end must be greater than start", {"field": where})
     if op_type == "MIX" and "levels" not in out:

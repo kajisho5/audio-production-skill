@@ -139,7 +139,7 @@ def test_ffmpeg_skill_dir_is_not_taken_from_the_request(workspace):
 def test_bogus_ffmpeg_skill_dir_is_rejected(workspace, tmp_path):
     fake = tmp_path / "fake-skill"
     (fake / "scripts").mkdir(parents=True)
-    for n in ("_contract", "probe", "audio", "cut", "loudness"):
+    for n in ("_contract", "probe", "audio", "cut", "loudness", "join"):
         (fake / "scripts" / f"{n}.py").write_text("import sys; print('{}'); sys.exit(0)\n")
     code, out, _ = run_cli(["plan", "-", "--json", "--ffmpeg-skill", str(fake)], json.dumps(request_doc([])))
     d = one_json(out)
@@ -163,7 +163,9 @@ def test_argv_builder_uses_only_numbers_and_resolved_paths(workspace):
     ops = [{"op_id": "t", "type": "TRIM", "inputs": ["track:t1"], "parameters": {"start": 0.5, "end": 2.5}},
            {"op_id": "c", "type": "CUT", "inputs": ["op:t"], "parameters": {"remove": [{"start": 0.5, "end": 1.0}]}},
            {"op_id": "n", "type": "NORMALIZE", "inputs": ["op:c"], "parameters": {"target_lufs": -16, "true_peak_db": -1, "loudness_range_lu": 7, "sample_rate": 44100}},
-           {"op_id": "d", "type": "NOISE_REDUCTION", "inputs": ["op:n"], "parameters": {"mode": "fft", "strength_db": 20}}]
+           {"op_id": "d", "type": "NOISE_REDUCTION", "inputs": ["op:n"], "parameters": {"mode": "fft", "strength_db": 20}},
+           {"op_id": "y", "type": "DYNAMICS", "inputs": ["op:d"], "parameters": {"gate": {"threshold_db": -40}, "compressor": {"threshold_db": -20, "ratio": 4, "attack_ms": 5, "release_ms": 80, "makeup_db": 2, "knee_db": 3}, "limiter": {"ceiling_db": -1}}},
+           {"op_id": "k", "type": "CONCAT", "inputs": ["op:y", "op:d"], "parameters": {"crossfade": 0.5, "sample_rate": 48000, "channels": 2}}]
     req = parse_request(request_doc(ops))
     g = OperationGraph(req.project)
     ex = Executor(PathPolicy(str(workspace)), FfmpegSkill(workspace))
@@ -172,18 +174,23 @@ def test_argv_builder_uses_only_numbers_and_resolved_paths(workspace):
     for n in g.order:
         ex._plan_node(states, states[n], sources)
     states["track:t1"].artifact = executor.Artifact(Path(sources["a"]["path"]), 6.0, 1, 48000, "pcm_s16le", 1, "0" * 64)
-    flags = re.compile(r"^(--[a-z-]+|-I|-o)$")
+    flags = re.compile(r"^(--[a-z-]+|-I|-o|none|fade)$")
     num = re.compile(r"^-?\d+(\.\d{3})?(-\d+\.\d{3})?(,\d+\.\d{3}-\d+\.\d{3})*$")
     for n in g.order[1:]:
         states[n].artifact = executor.Artifact(workspace / f"{n}.wav", 1.0, 1, 48000, "pcm_s16le", 1, "1" * 64)
         for tool, argv in ex._argv(states[n], states, sources, workspace / "o.wav"):
-            assert tool in ("audio", "cut", "loudness")
+            assert tool in ("audio", "cut", "loudness", "join")
             for a in argv:
                 assert flags.match(a) or num.match(a) or os.path.isabs(a), (n, a)
-    assert ex._argv(states["op:c"], states, sources, workspace / "o.wav") == [("cut", [str(workspace / "op:t.wav"), "--segments", "0.000-0.500,1.000-2.000", "-o", str(workspace / "o.wav")])]
+    assert ex._argv(states["op:c"], states, sources, workspace / "o.wav") == [("cut", [str(workspace / "op:t.wav"), "--segments", "0.000-0.500,1.000-2.000", "--accurate", "-o", str(workspace / "o.wav")])]
+    assert ex._argv(states["op:t"], states, sources, workspace / "o.wav") == [("cut", [sources["a"]["path"], "--start", "0.500", "--end", "2.500", "--accurate", "-o", str(workspace / "o.wav")])]
     assert ex._argv(states["op:n"], states, sources, workspace / "o.wav")[0][1][1:-2] == ["-I", "-16.000", "--tp", "-1.000", "--lra", "7.000", "--sample-rate", "44100"]
-    # a compressed source is decoded to WAV before ffmpeg-skill/cut (which stream-copies)
-    sources["a"]["codec"] = "aac"
-    states["track:t1"].artifact = executor.Artifact(Path(sources["a"]["path"]), 6.0, 1, 48000, "aac", 1, "0" * 64)
-    calls = ex._argv(states["op:t"], states, sources, workspace / "o.wav")
-    assert [c[0] for c in calls] == ["audio", "cut"] and calls[0][1] == [sources["a"]["path"], "-o", str(workspace / "o.decode.wav")] and calls[1][1][0] == str(workspace / "o.decode.wav")
+    dyn = ex._argv(states["op:y"], states, sources, workspace / "o.wav")[0][1]
+    assert dyn[1:-2] == ["--gate", "--gate-threshold", "-40.000", "--compress", "--comp-attack", "5.000", "--comp-knee", "3.000", "--comp-makeup", "2.000",
+                         "--comp-ratio", "4.000", "--comp-release", "80.000", "--comp-threshold", "-20.000", "--limit", "--limit-ceiling", "-1.000"]
+    cat = ex._argv(states["op:k"], states, sources, workspace / "o.wav")[0]
+    assert cat[0] == "join" and cat[1][2:] == ["--transition", "fade", "--duration", "0.500", "--sample-rate", "48000", "--channels", "2", "-o", str(workspace / "o.wav")]
+    # a video-container source is extracted through ffmpeg-skill/audio, never handed to cut / join as a video
+    sources["a"]["has_video"] = True
+    states["track:t1"].artifact = None
+    assert ex._argv(states["track:t1"], states, sources, workspace / "x.wav") == [("audio", [sources["a"]["path"], "-o", str(workspace / "x.wav")])]
