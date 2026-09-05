@@ -14,6 +14,24 @@ from .model import (CHANNEL_LAYOUTS, DYNAMICS_STAGES, FORBIDDEN_KEYS, ID_RE, INT
 
 CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
 
+# Cross-repository Capability ids (kajisho5/AI-video-production-OS docs/SPEC.md
+# `CapabilityContract.provides`), matching the ids already assigned to this Skill's
+# operations in that project's own docs/CAPABILITY_MATRIX.md. FADE_IN and FADE_OUT are
+# both directions of the one `audio.fade` capability; every other operation type maps
+# 1:1. All thirteen always write a validated audio artifact through the single
+# `{SKILL_ID}/run` tool, so none is excluded the way `thumbnail/validate` is elsewhere.
+CAPABILITY_IDS: Dict[str, str] = {
+    "GAIN": "audio.gain", "TRIM": "audio.trim", "CUT": "audio.cut", "SILENCE_REMOVE": "audio.silence_remove",
+    "FADE_IN": "audio.fade", "FADE_OUT": "audio.fade", "NORMALIZE": "audio.normalize", "MIX": "audio.mix",
+    "MONO": "audio.mono", "STEREO": "audio.stereo", "DOWNMIX": "audio.downmix", "NOISE_REDUCTION": "audio.noise_reduction",
+    "DYNAMICS": "audio.dynamics", "CONCAT": "audio.concat",
+}
+
+
+def capability_provides() -> List[Dict[str, str]]:
+    return [{"id": CAPABILITY_IDS[typ], "lifecycle": "EXPERIMENTAL", "tool_id": f"{SKILL_ID}/run", "operation": typ}
+            for typ in sorted(OPERATION_TYPES)]
+
 
 def _param_schema(ps: Dict[str, Any]) -> Dict[str, Any]:
     out = {k: v for k, v in ps.items() if k in ("type", "required", "min", "max", "enum", "default", "description", "max_length")}
@@ -59,6 +77,7 @@ def skill_contract() -> Dict[str, Any]:
         "not_provided": ["AI reasoning", "decisions", "production plans", "loudness or silence measurement for decisions (media-analysis-skill)", "speech recognition",
                          "video editing", "arbitrary ffmpeg filters", "shell execution", "network access"],
         "tools": tools,
+        "provides": capability_provides(),
         "operations": operation_specs(),
         "unsupported_operations": [{"type": t, "status": "not_implemented", "reason": r} for t, r in UNSUPPORTED_OPERATIONS.items()],
         "output_formats": {f: {"extension": s["extension"], "codec": s["codec"], "required_capability": s["capability"], "lossless": s["lossless"]} for f, s in OUTPUT_FORMATS.items()},

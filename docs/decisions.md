@@ -20,3 +20,15 @@
 - **ADR-9 Track ffmpeg-skill's contract, not its version number.** 0.9.1 added exactly the capabilities 0.9.0
   lacked (sample-accurate audio cuts, audio join, typed dynamics, extraction, FFmpeg 8 detection); the skill adopted
   them the same day and raised its minimum to 0.9.1 instead of keeping work-arounds for 0.9.0's defects.
+- **ADR-10 `provides`: publish this Skill's fourteen operations as cross-repository Capability ids.** Added for
+  `kajisho5/AI-video-production-OS`'s `CapabilityContract.provides` (`docs/SPEC.md` there), so a registry can
+  resolve "who provides `audio.gain`" without hardcoding this repository. `model.OPERATION_TYPES` has no native
+  capability-shaped id of its own (unlike video-editing-skill's `operations.OPERATIONS`), so the id per operation
+  type is a new naming decision, not a mechanical derivation — it matches the ids already assigned in that
+  project's own `docs/CAPABILITY_MATRIX.md`, kept here in `contract.CAPABILITY_IDS` as the single source of truth
+  going forward. `FADE_IN` and `FADE_OUT` are both directions of one `audio.fade` capability; the other twelve
+  operation types map 1:1. Every operation type gets an id: this Skill has a single tool (`{SKILL_ID}/run`) and
+  every operation always writes a validated audio artifact through it, unlike `thumbnail-skill`'s `validate` tool,
+  which produces no output and is excluded there. Additive: it adds a new top-level `provides` key derived from
+  `OPERATION_TYPES` and says nothing `operations[]` doesn't already say, only indexed by Capability id instead of
+  by operation type.
