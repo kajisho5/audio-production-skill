@@ -85,6 +85,16 @@ Full description: [docs/architecture.md](docs/architecture.md).
 `unsupported_operations`, `output_formats`, `errors.codes`, `errors.exit_codes`, `schema_versions`. Everything is
 derived from the tables the code runs on; there are no placeholder operations.
 
+`provides` lists this Skill's fourteen operations by their cross-repository Capability id (`audio.gain`,
+`audio.trim`, `audio.cut`, `audio.silence_remove`, `audio.fade` for both `FADE_IN`/`FADE_OUT`, `audio.normalize`,
+`audio.mix`, `audio.mono`, `audio.stereo`, `audio.downmix`, `audio.noise_reduction`, `audio.dynamics`,
+`audio.concat`), each with the `operation` it maps to, its `tool_id` (always `audio-production/run`, since this
+Skill exposes one execution tool), and a `lifecycle`. This is a different vocabulary from the "Capabilities" above
+(video-production-agent's environment/binary `CapabilityResolver` checks, e.g. `ffmpeg`, `filter:<name>`): `provides`
+is for `kajisho5/AI-video-production-OS`'s `CapabilityContract.provides` (see that project's `docs/SPEC.md` and
+`docs/decisions.md` ADR-10 here), so a registry can resolve "who provides `audio.gain`" without hardcoding this
+repository. It is additive and derived from `model.OPERATION_TYPES`; see ADR-10.
+
 ### Input schema (`audio-production/request@1`)
 
 ```json
