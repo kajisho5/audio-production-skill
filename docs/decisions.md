@@ -32,3 +32,9 @@
   which produces no output and is excluded there. Additive: it adds a new top-level `provides` key derived from
   `OPERATION_TYPES` and says nothing `operations[]` doesn't already say, only indexed by Capability id instead of
   by operation type.
+- **ADR-11 `contract --check` with a pinned snapshot, classifying drift as breaking or additive.** The ecosystem
+  pattern (video-editing-skill `contract --check`, video-production-agent `DRIFT_KEYS`): the pinned blocks are exactly
+  what the agent compares plus `operations` and `provides`, so this repository fails its own CI before a change can
+  silently make the agent mark the Skill MISSING. `version` is pinned too: a bump is coordinated with the agent's
+  re-pin, and additive keys (like `provides`) stay within a version. The OS specification behind `provides` is a
+  draft branch; it is labelled EXPERIMENTAL here (docs/STATE.md) until the OS merges it.

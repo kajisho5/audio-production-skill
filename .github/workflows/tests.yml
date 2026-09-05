@@ -49,3 +49,5 @@ jobs:
       - run: audio-production skill --json > contract.json
         shell: bash
       - run: python -c "import json; json.load(open('contract.json'))"
+      - run: audio-production contract --check tests/contract/contract.json --json
+        shell: bash
