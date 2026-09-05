@@ -36,7 +36,8 @@ is therefore `[0.9.1, 1.0.0)`.
 - `audio.py --mono` uses `pan=mono|c0=0.5*c0+0.5*c1`: on a mono input this halves the level, so MONO is refused
   unless the input has exactly 2 channels.
 - `cut.py --accurate` on audio trims at the sample (`atrim`) and encodes to the codec of the output extension;
-  measured `precision: sample`, `duration_error_ms: 0.0` on WAV, AAC and video-container sources. This skill always
+  measured `precision: sample`, `duration_error_ms: 0.0` on WAV, AAC and video-container sources with ffmpeg 6.1;
+  on the Windows CI runner's FFmpeg an AAC source came out 12 ms short (decoder priming), PCM exact. This skill always
   passes `--accurate` and records `precision` / `duration_error_ms` / `reencoded` in `measurements.cut`.
 - `join.py` with audio-only inputs concatenates at one sample rate (first clip's or `--sample-rate`) and one layout
   (widest or `--channels`), with `acrossfade` (`--transition fade --duration`) or a butt join (`--transition none`);

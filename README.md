@@ -299,8 +299,9 @@ tests may call ffmpeg; the skill never does). Measured on ffmpeg 6.1.1 / ffmpeg-
 ## Current limitations
 
 - Only the first audio stream of a source is used (no `audio_stream` selection yet).
-- Every artifact's duration is validated within 0.1 s; cuts are sample-accurate, but CONCAT / MIX / export may
-  differ by a codec frame (measured +8–10 ms with AAC sources).
+- Every artifact's duration is validated within 0.1 s. Cuts are sample-accurate on PCM sources; on compressed
+  sources the boundary depends on the decoder's priming handling (AAC: exact on ffmpeg 6.1, −12 ms on the Windows
+  CI runner's FFmpeg), and CONCAT / MIX / export may differ by a codec frame (measured +8–10 ms with AAC sources).
 - Intermediates are 16-bit PCM WAV. MIX output duration follows the first input; per-input pan is not available.
 - Loudness true-peak of a lossy output (`m4a`, `mp3`, …) may exceed the ceiling by the codec's overshoot; the
   verification happens on the PCM intermediate.
