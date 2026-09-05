@@ -77,3 +77,82 @@ def test_capability_status_table():
     assert s["filter:afftdn"] == "unknown" and s["encoder:libopus"] == "unsupported"
     s = capability_status(Info(), {"ffmpeg": "6.1", "ffprobe": "6.1", "available": ["filter:silencedetect"], "missing": ["filter:loudnorm"], "missing_optional": []})
     assert s["filter:loudnorm"] == "unsupported"                                                     # some filters detected: a missing one is really missing
+
+
+# ---- contract --check: implementation consistency, pinned snapshot, drift classification
+import copy
+import os
+from pathlib import Path
+
+from audio_production.contract_check import PINNED_BLOCKS, contract_drift, run_check, verify_implementation
+
+PINNED = Path(__file__).resolve().parent / "contract" / "contract.json"
+
+
+def test_live_contract_is_consistent_with_implementation_and_docs():
+    assert verify_implementation() == []
+    rep = run_check()
+    assert rep["status"] == "ok" and rep["exit_code"] == 0 and rep["compared_with_saved"] is False
+
+
+def test_pinned_contract_matches_live():
+    saved = json.load(open(PINNED, encoding="utf-8"))
+    rep = run_check(saved)
+    assert rep["status"] == "ok", rep["drift"]
+    assert rep["drift"] == {"breaking": [], "additive": []}
+
+
+def test_drift_classification():
+    live = skill_contract()
+    # breaking: a pinned block, an operation parameter, a removed operation, the version, a removed key anywhere
+    m = copy.deepcopy(live); m["version"] = "0.2.0"
+    assert any(x.startswith("version") for x in contract_drift(m)["breaking"])
+    m = copy.deepcopy(live); m["operations"][0]["parameters"]["extra"] = {"type": "number", "required": False, "description": "x"}
+    assert any(x.startswith("operations/") for x in contract_drift(m)["breaking"])
+    m = copy.deepcopy(live); m["operations"] = m["operations"][1:]
+    d = contract_drift(m)["breaking"]
+    assert any("added" in x for x in d)                      # live has an operation the saved copy lacks: agents must re-pin
+    m = copy.deepcopy(live); m["errors"]["codes"] = m["errors"]["codes"][:-1]
+    assert any(x.startswith("errors") for x in contract_drift(m)["breaking"])
+    m = copy.deepcopy(live); m["only_in_saved"] = 1
+    assert contract_drift(m)["breaking"] == ["only_in_saved: removed"]
+    # additive: a key the live contract gained outside the pinned blocks
+    m = copy.deepcopy(live); del m["loudness"]
+    d = contract_drift(m)
+    assert d["breaking"] == [] and d["additive"] == ["loudness: added"]
+    assert run_check(m)["status"] == "additive" and run_check(m)["exit_code"] == 0
+    m = copy.deepcopy(live); m["provides"] = m["provides"][:-1]
+    assert any(x.startswith("provides") for x in contract_drift(m)["breaking"])
+    assert "provides" in PINNED_BLOCKS and "operations" in PINNED_BLOCKS
+
+
+def test_verify_implementation_detects_inconsistency():
+    live = skill_contract()
+    m = copy.deepcopy(live); m["execution"]["shell"] = True
+    assert any("execution.shell" in x for x in verify_implementation(m))
+    m = copy.deepcopy(live); m["operations"][0]["tool"] = "ffmpeg-skill/render"
+    assert any("tool" in x for x in verify_implementation(m))
+    m = copy.deepcopy(live); m["provides"] = m["provides"][:-1]
+    assert any("provides" in x for x in verify_implementation(m))
+    m = copy.deepcopy(live); m["tools"] = []
+    assert any("tools" in x for x in verify_implementation(m))
+    assert run_check(m)["status"] == "breaking"      # run_check verifies the live contract; a mutated saved copy is drift
+
+
+def test_contract_check_cli_exit_codes(tmp_path):
+    code, out, _ = run_cli(["contract", "--check", str(PINNED), "--json"])
+    d = one_json(out)
+    assert code == 0 and d["status"] == "ok" and d["schema"] == "audio-production/contract-check@1"
+    code, out, _ = run_cli(["skill", "--check", "--json"])
+    assert code == 0 and one_json(out)["status"] == "ok"
+    stale = json.load(open(PINNED, encoding="utf-8"))
+    stale["version"] = "0.0.9"
+    (tmp_path / "stale.json").write_text(json.dumps(stale), encoding="utf-8")
+    code, out, _ = run_cli(["contract", "--check", str(tmp_path / "stale.json"), "--json"])
+    d = one_json(out)
+    assert code == 1 and d["status"] == "breaking" and d["drift"]["breaking"]
+    code, out, _ = run_cli(["contract", "--check", "-", "--json"], "{not json")
+    assert code == 1 and one_json(out)["status"] == "fail"
+    code, out, _ = run_cli(["contract", "--check", str(PINNED)])
+    assert code == 0 and out.strip() == "contract check: ok"
+    assert os.path.getsize(PINNED) > 1000

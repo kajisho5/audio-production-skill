@@ -14,10 +14,11 @@ import argparse
 import json
 import signal
 import sys
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import PACKAGE_NAME, VERSION
 from .contract import skill_contract
+from .contract_check import run_check
 from .doctor import doctor_report, runtime_context
 from .errors import EXIT_CODES, AudioError
 from .executor import RESPONSE_SCHEMA_ID, Executor
@@ -43,7 +44,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--version", action="version", version=f"{PACKAGE_NAME} {VERSION}")
     sub = ap.add_subparsers(dest="cmd", required=True)
     for name in ("skill", "contract"):
-        c = sub.add_parser(name, help="print the Skill / Capability / Tool contract")
+        c = sub.add_parser(name, help="print the Skill / Capability / Tool contract, or check it")
+        c.add_argument("--check", nargs="?", const="", metavar="FILE", default=None,
+                       help="verify the contract against the implementation; with FILE (or -) also report drift against that saved contract; exit 1 on problems / breaking drift")
         _add_common(c)
     d = sub.add_parser("doctor", help="diagnose the environment against the contract")
     d.add_argument("--workspace")
@@ -119,6 +122,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     as_json = bool(getattr(args, "json", False))
     if args.cmd in ("skill", "contract"):
+        if args.check is not None:
+            rep: Dict[str, Any]
+            try:
+                saved = _read_document(args.check) if args.check else None
+            except AudioError as e:
+                saved = None
+                rep = {"schema": f"{SKILL_ID}/contract-check@1", "skill": {"id": SKILL_ID, "version": VERSION}, "status": "fail",
+                       "problems": [f"cannot read saved contract: {e.message}"], "drift": {"breaking": [], "additive": []}, "compared_with_saved": False, "exit_code": 1}
+            else:
+                rep = run_check(saved)
+            if as_json:
+                _emit(rep, True)
+            else:
+                print(f"contract check: {rep['status']}")
+                for x in rep["problems"]:
+                    print(f"  problem: {x}")
+                for x in rep["drift"]["breaking"]:
+                    print(f"  [breaking] {x}")
+                for x in rep["drift"]["additive"]:
+                    print(f"  [additive] {x}")
+            return int(rep["exit_code"])
         _emit(skill_contract(), as_json)
         return 0
     if args.cmd == "doctor":

@@ -85,6 +85,12 @@ Full description: [docs/architecture.md](docs/architecture.md).
 `unsupported_operations`, `output_formats`, `errors.codes`, `errors.exit_codes`, `schema_versions`. Everything is
 derived from the tables the code runs on; there are no placeholder operations.
 
+`audio-production contract --check [FILE|-]` verifies the printed contract against the implementation and the README
+and, with a saved copy, classifies every difference as **breaking** (a pinned block, an operation's pinned fields, a
+removed key) or **additive** (a new key outside the pinned blocks); exit 1 on problems or breaking drift. CI runs it
+against `tests/contract/contract.json`; regenerate that file when a contract change is intended. Pinned blocks and
+the versioning rules: [docs/contract.md](docs/contract.md).
+
 `provides` lists this Skill's fourteen operations by their cross-repository Capability id (`audio.gain`,
 `audio.trim`, `audio.cut`, `audio.silence_remove`, `audio.fade` for both `FADE_IN`/`FADE_OUT`, `audio.normalize`,
 `audio.mix`, `audio.mono`, `audio.stereo`, `audio.downmix`, `audio.noise_reduction`, `audio.dynamics`,
@@ -93,7 +99,9 @@ Skill exposes one execution tool), and a `lifecycle`. This is a different vocabu
 (video-production-agent's environment/binary `CapabilityResolver` checks, e.g. `ffmpeg`, `filter:<name>`): `provides`
 is for `kajisho5/AI-video-production-OS`'s `CapabilityContract.provides` (see that project's `docs/SPEC.md` and
 `docs/decisions.md` ADR-10 here), so a registry can resolve "who provides `audio.gain`" without hardcoding this
-repository. It is additive and derived from `model.OPERATION_TYPES`; see ADR-10.
+repository. It is additive and derived from `model.OPERATION_TYPES`; see ADR-10. Status: EXPERIMENTAL — the OS
+specification it follows is a draft on that repository's `claude/ai-video-production-os-arch-fck6fy` branch, not on
+its `main`; the ids are kept in sync with that draft's `docs/CAPABILITY_MATRIX.md`.
 
 ### Input schema (`audio-production/request@1`)
 
@@ -166,6 +174,9 @@ Failure (any stage) is the same document shape with `"ok": false`, `"status": "e
 `"error": {"code", "message", "retryable", "details"}`; the per-node `results` show which node failed and which
 were skipped. `ok` mirrors the process exit code (0 ⇔ `ok`); `status` follows the media-analysis-skill convention.
 
+Repository guide for future sessions: [CLAUDE.md](CLAUDE.md); current / experimental / planned state:
+[docs/STATE.md](docs/STATE.md); contract versioning: [docs/contract.md](docs/contract.md).
+
 ## Supported operations
 
 | type | inputs | parameters | ffmpeg-skill tool | notes |
@@ -199,6 +210,7 @@ and `CONCAT.sample_rate`), `FORMAT_CONVERT` (an output property). Details and th
 | command | reads media | writes media | exit |
 |---|---|---|---|
 | `skill --json` / `contract --json` | no | no | 0 |
+| `contract --check [FILE\|-] [--json]` | no | no | 0 ok / additive, 1 problems / breaking |
 | `doctor --json [--ffmpeg-skill DIR] [--workspace DIR] [--allowed-input ROOT]` | no (runs ffmpeg-skill doctor) | no | 0, 1 on `fail` |
 | `validate REQUEST\|- --json` | no | no | 0 / error exit code |
 | `plan REQUEST\|- --json` | probe only (read-only) | no | 0 / error exit code |
@@ -326,6 +338,9 @@ tests may call ffmpeg; the skill never does). Measured on ffmpeg 6.1.1 / ffmpeg-
 Typed channel mapping, standalone resampling, audio-stream selection, more noise-reduction modes with detected
 capabilities, per-input pan in MIX, 24-bit intermediates — each requires a corresponding capability in ffmpeg-skill's
 public contract (or a decision to add a second execution backend), and will be declared only once implemented and tested.
+
+Repository guide for future sessions: [CLAUDE.md](CLAUDE.md); current / experimental / planned state:
+[docs/STATE.md](docs/STATE.md); contract versioning: [docs/contract.md](docs/contract.md).
 
 ## Support
 

@@ -18,7 +18,7 @@ CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
 # `CapabilityContract.provides`), matching the ids already assigned to this Skill's
 # operations in that project's own docs/CAPABILITY_MATRIX.md. FADE_IN and FADE_OUT are
 # both directions of the one `audio.fade` capability; every other operation type maps
-# 1:1. All thirteen always write a validated audio artifact through the single
+# 1:1. All fourteen always write a validated audio artifact through the single
 # `{SKILL_ID}/run` tool, so none is excluded the way `thumbnail/validate` is elsewhere.
 CAPABILITY_IDS: Dict[str, str] = {
     "GAIN": "audio.gain", "TRIM": "audio.trim", "CUT": "audio.cut", "SILENCE_REMOVE": "audio.silence_remove",
