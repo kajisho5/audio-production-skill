@@ -317,6 +317,11 @@ Typed channel mapping, standalone resampling, audio-stream selection, more noise
 capabilities, per-input pan in MIX, 24-bit intermediates — each requires a corresponding capability in ffmpeg-skill's
 public contract (or a decision to add a second execution backend), and will be declared only once implemented and tested.
 
+## Support
+
+If this skill saves you time, you can help keep it maintained through [GitHub Sponsors](https://github.com/sponsors/kajisho5).
+Issues and pull requests are just as welcome.
+
 ## License
 
 [MIT](LICENSE)
