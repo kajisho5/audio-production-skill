@@ -38,3 +38,8 @@
   silently make the agent mark the Skill MISSING. `version` is pinned too: a bump is coordinated with the agent's
   re-pin, and additive keys (like `provides`) stay within a version. The OS specification behind `provides` is a
   draft branch; it is labelled EXPERIMENTAL here (docs/STATE.md) until the OS merges it.
+- **ADR-12 Cleanup is an operator flag, not a request option.** video-production-agent pins the whole `request`
+  and `response` contract blocks; adding `options.cleanup` would be breaking for its pin for a purely local
+  housekeeping choice. `run --cleanup intermediates` removes the project's work directory only after every output
+  is exported and validated (never on failure, never outputs), reports it under a new response key `cleanup`, and is
+  described by the additive contract key `cleanup`. Age / size eviction across projects stays with the operator.

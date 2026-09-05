@@ -8,8 +8,8 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 - Skill `audio-production` 0.1.0, contract `audio-production/contract@1`, one tool `audio-production/run`, 14
   operation types; sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
 - Execution through ffmpeg-skill 0.9.1 ≤ v < 1.0 (`probe`, `audio`, `cut --accurate`, `loudness`, `join`).
-- CLI `skill | contract [--check [FILE|-]]`, `doctor`, `validate`, `plan`, `run` with `--json`; one JSON document on
-  stdout; 15 error codes with stable exit codes.
+- CLI `skill | contract [--check [FILE|-]]`, `doctor`, `validate`, `plan`, `run` (`--cleanup keep|intermediates`) with
+  `--json`; one JSON document on stdout; 15 error codes with stable exit codes.
 - Tests: unit / security / contract (pinned `tests/contract/contract.json`) / integration with real audio; CI on
   Linux 3.9 + 3.11, Windows, macOS with real FFmpeg and ffmpeg-skill pinned to commit 2abd89c.
 - Consumers: video-production-agent (ADR-030 there) pins this contract at `tools/audio_production/contract_0.1.0.json`
@@ -29,8 +29,7 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
    change. Not started.
 2. A release tag / GitHub release for 0.1.0 once the human decides on distribution (PyPI is not set up; nothing is
    published). Do not claim availability.
-3. Work-directory eviction policy for `<workspace>/.audio-production/<project_id>/`.
-4. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
+3. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
 
 ## Known limitations (see README "Current limitations")
 
@@ -47,4 +46,4 @@ outputs may overshoot the true-peak ceiling; core filters reported `unknown` by 
 ## Change log of state
 
 - 2026-09-05: #1 skill implemented (0.1.0), #2 sponsorship links, #3 `provides`, #4 contract --check + pinned
-  snapshot + CLAUDE.md + this file.
+  snapshot + CLAUDE.md + this file, #5 `run --cleanup intermediates` (operator-level; the request block stays pinned).

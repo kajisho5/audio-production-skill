@@ -8,7 +8,7 @@ from typing import Any, Dict, List
 from . import CONTRACT_SCHEMA_VERSION, DOCTOR_SCHEMA_VERSION, PACKAGE_NAME, REQUEST_SCHEMA_VERSION, RESPONSE_SCHEMA_VERSION, SKILL_ID, VERSION
 from .adapter import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, SUPPORTED_MAX_EXCLUSIVE, SUPPORTED_MIN, TOOLS_USED
 from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
-from .executor import DURATION_TOLERANCE, TOOL_FOR, WORK_DIR_NAME
+from .executor import CLEANUP_POLICIES, DURATION_TOLERANCE, TOOL_FOR, WORK_DIR_NAME
 from .model import (CHANNEL_LAYOUTS, DYNAMICS_STAGES, FORBIDDEN_KEYS, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
                     OUTPUT_FORMATS, REF_RE, REQUEST_SCHEMA_ID, SAMPLE_RATES, UNSUPPORTED_OPERATIONS)
 
@@ -105,6 +105,9 @@ def skill_contract() -> Dict[str, Any]:
         "provenance": {"per_operation": ["operation_id", "type", "tool", "tool_versions", "parameters", "input_hashes", "output_hash", "segments", "status", "measurements", "tool_commands_observed"],
                        "per_output": ["skill", "skill_version", "tool", "tool_versions", "output_hash", "operations (chain)", "sources (sha256)"],
                        "identity": "sha256 over canonical JSON of {type, parameters, input identities, tool versions}; sources by file sha256; no timestamps, no UUIDs"},
+        "cleanup": {"cli_flag": "--cleanup", "policies": list(CLEANUP_POLICIES), "default": "keep",
+                    "scope": f"regular files directly inside <workspace>/{WORK_DIR_NAME}/<project_id>/ after a fully successful run; never on failure, never outputs",
+                    "response_key": "cleanup", "note": "operator-level (CLI), deliberately not a request option: the request block is pinned by consumers"},
         "schema_versions": {"contract": str(CONTRACT_SCHEMA_VERSION), "request": str(REQUEST_SCHEMA_VERSION), "response": str(RESPONSE_SCHEMA_VERSION), "doctor": str(DOCTOR_SCHEMA_VERSION)},
         "errors": {"codes": list(ERROR_CODES), "exit_codes": dict(EXIT_CODES), "retryable": {c: ERROR_TABLE[c][1] for c in ERROR_CODES}, "success_exit_code": 0},
     }

@@ -1099,6 +1099,17 @@
     ],
     "identity": "sha256 over canonical JSON of {type, parameters, input identities, tool versions}; sources by file sha256; no timestamps, no UUIDs"
   },
+  "cleanup": {
+    "cli_flag": "--cleanup",
+    "policies": [
+      "keep",
+      "intermediates"
+    ],
+    "default": "keep",
+    "scope": "regular files directly inside <workspace>/.audio-production/<project_id>/ after a fully successful run; never on failure, never outputs",
+    "response_key": "cleanup",
+    "note": "operator-level (CLI), deliberately not a request option: the request block is pinned by consumers"
+  },
   "schema_versions": {
     "contract": "1",
     "request": "1",
