@@ -346,3 +346,20 @@ def test_cli_validate_and_exit_codes(workspace):
     assert code == EXIT_CODES["UNSUPPORTED_OPERATION"] and one_json(out)["error"]["code"] == "UNSUPPORTED_OPERATION"
     code, out, _ = run_cli(["run", "-"], json.dumps(request_doc([op("g", "GAIN", ["track:t1"], gain_db=-3)])))
     assert code == 0 and "op:g" in out and not out.strip().startswith("{")
+
+
+def test_cleanup_policy_removes_intermediates_only_after_success(workspace):
+    doc = request_doc([op("g", "GAIN", ["track:t1"], gain_db=-3), op("f", "FADE_IN", ["op:g"], duration=0.2)],
+                      outputs=[{"output_id": "main", "operation": "op:f", "path": "out/main.wav", "format": "wav", "overwrite": True}])
+    code, d = run(doc)                                          # default: keep
+    assert d["ok"] and d["cleanup"] == {"policy": "keep", "applied": False, "work_dir": str(workspace / ".audio-production" / "p1")}
+    assert list(workspace.glob(".audio-production/p1/*.wav"))
+    code, d = run(doc, "--cleanup", "intermediates")
+    assert d["ok"] and d["cleanup"]["applied"] is True and d["cleanup"]["removed_files"] >= 4 and d["cleanup"]["errors"] == []
+    assert not (workspace / ".audio-production" / "p1").exists() and (workspace / "out" / "main.wav").exists()
+    # a failed run keeps whatever validated intermediates exist (nothing here) and reports the policy as not applied
+    bad = request_doc([op("g", "GAIN", ["track:t1"], gain_db=-3)], outputs=[{"output_id": "main", "operation": "op:g", "path": "out/main.wav", "format": "wav", "overwrite": True, "expect": {"channels": 2}}])
+    code, d = run(bad, "--cleanup", "intermediates")
+    assert d["ok"] is False and d["cleanup"]["applied"] is False and list(workspace.glob(".audio-production/p1/*.json"))
+    code, out, _ = run_cli(["run", "-", "--json", "--cleanup", "everything"], json.dumps(doc))
+    assert code == 2 and "invalid choice" in _

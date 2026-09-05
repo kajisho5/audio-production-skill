@@ -29,6 +29,10 @@ RESPONSE_SCHEMA_ID = f"{SKILL_ID}/response@{RESPONSE_SCHEMA_VERSION}"
 WORK_DIR_NAME = ".audio-production"
 DURATION_TOLERANCE = 0.1     # seconds; cuts are sample-accurate (--accurate), join / mix / export may differ by a codec frame
 MANIFEST_SCHEMA = f"{SKILL_ID}/manifest@1"
+# operator-level policy for <workspace>/.audio-production/<project_id>/ after a fully successful run (CLI --cleanup):
+#   keep           intermediates and manifests stay, so an identical re-run reuses them (default)
+#   intermediates  the project's work directory is removed once every output is exported and validated
+CLEANUP_POLICIES = ("keep", "intermediates")
 
 # tool selection per node type (ffmpeg-skill tool, extra capabilities beyond ffmpeg/ffprobe)
 TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
@@ -98,7 +102,10 @@ class NodeState:
 
 class Executor:
     def __init__(self, policy: PathPolicy, skill: FfmpegSkill, dry_run: bool = False, reuse: bool = True, timeout: Optional[float] = None,
-                 tool_versions: Optional[Dict[str, str]] = None, capabilities: Optional[Dict[str, str]] = None):
+                 tool_versions: Optional[Dict[str, str]] = None, capabilities: Optional[Dict[str, str]] = None, cleanup: str = "keep"):
+        if cleanup not in CLEANUP_POLICIES:
+            raise AudioError("INVALID_REQUEST", f"cleanup policy must be one of {CLEANUP_POLICIES}", {"cleanup": cleanup})
+        self.cleanup = cleanup
         self.policy = policy
         self.skill = skill
         self.dry_run = dry_run
@@ -213,8 +220,37 @@ class Executor:
                                 "tool_runs": [self._tool_run_dict(r) for r in self.skill.runs]}
         if failure is not None:
             body["error"] = failure.to_dict()
+            body["cleanup"] = {"policy": self.cleanup, "applied": False, "reason": "run did not succeed; intermediates are kept for diagnosis and reuse"}
             return self._envelope(False, "cancelled" if cancelled else "error", body)
+        body["cleanup"] = self._cleanup(work_dir, outputs)
         return self._envelope(True, "ok", body)
+
+    def _cleanup(self, work_dir: Path, outputs: Dict[str, Path]) -> Dict[str, Any]:
+        """Apply the cleanup policy after a fully successful run. Only regular files directly inside the project's work
+        directory are removed (the executor never writes anywhere else there); outputs are never inside it."""
+        if self.cleanup != "intermediates":
+            return {"policy": self.cleanup, "applied": False, "work_dir": str(work_dir)}
+        expected_parent = self.policy.workspace / WORK_DIR_NAME
+        if work_dir.parent != expected_parent or any(str(o).startswith(str(work_dir) + os.sep) for o in outputs.values()):
+            return {"policy": self.cleanup, "applied": False, "work_dir": str(work_dir), "reason": "work directory is not the project directory under the workspace"}
+        removed_files, removed_bytes, errors = 0, 0, []
+        for child in sorted(work_dir.iterdir()) if work_dir.is_dir() else []:
+            if not child.is_file() or child.is_symlink():
+                errors.append(f"left in place (not a regular file): {child.name}")
+                continue
+            try:
+                size = child.stat().st_size
+                child.unlink()
+                removed_files += 1
+                removed_bytes += size
+            except OSError as e:
+                errors.append(f"{child.name}: {e}")
+        if not errors:
+            try:
+                work_dir.rmdir()
+            except OSError:
+                pass
+        return {"policy": self.cleanup, "applied": True, "work_dir": str(work_dir), "removed_files": removed_files, "removed_bytes": removed_bytes, "errors": errors}
 
     # ---- planning
     def _select_tool(self, node: Node) -> Tuple[str, List[str]]:

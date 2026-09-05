@@ -21,7 +21,7 @@ from .contract import skill_contract
 from .contract_check import run_check
 from .doctor import doctor_report, runtime_context
 from .errors import EXIT_CODES, AudioError
-from .executor import RESPONSE_SCHEMA_ID, Executor
+from .executor import CLEANUP_POLICIES, RESPONSE_SCHEMA_ID, Executor
 from .security import PathPolicy
 from . import SKILL_ID
 
@@ -37,6 +37,8 @@ def _add_run_opts(ap: argparse.ArgumentParser) -> None:
     ap.add_argument("--ffmpeg-skill", help="ffmpeg-skill checkout directory (default: env / ~/.claude/skills/ffmpeg-skill / ./vendor / ..)")
     ap.add_argument("--timeout", type=float, default=600.0, help="seconds per tool invocation (default 600)")
     ap.add_argument("--no-reuse", action="store_true", help="do not reuse intermediates with a matching operation id")
+    ap.add_argument("--cleanup", choices=list(CLEANUP_POLICIES), default="keep",
+                    help="after a fully successful run: keep the project's intermediates for reuse (default) or remove them (intermediates)")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -163,7 +165,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             policy = PathPolicy(args.workspace, args.allowed_input)
             skill, versions, caps = runtime_context(args.ffmpeg_skill, args.timeout)
-            executor = Executor(policy, skill, dry_run=dry_run, reuse=not args.no_reuse, timeout=args.timeout, tool_versions=versions, capabilities=caps)
+            executor = Executor(policy, skill, dry_run=dry_run, reuse=not args.no_reuse, timeout=args.timeout, tool_versions=versions, capabilities=caps,
+                                cleanup=args.cleanup)
 
             def _cancel(signum: int, frame: Any) -> None:
                 skill.cancel()

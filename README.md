@@ -214,7 +214,7 @@ and `CONCAT.sample_rate`), `FORMAT_CONVERT` (an output property). Details and th
 | `doctor --json [--ffmpeg-skill DIR] [--workspace DIR] [--allowed-input ROOT]` | no (runs ffmpeg-skill doctor) | no | 0, 1 on `fail` |
 | `validate REQUEST\|- --json` | no | no | 0 / error exit code |
 | `plan REQUEST\|- --json` | probe only (read-only) | no | 0 / error exit code |
-| `run REQUEST\|- --json [--dry-run] [--workspace DIR] [--allowed-input ROOT] [--ffmpeg-skill DIR] [--timeout S] [--no-reuse]` | yes | yes | 0 / error exit code |
+| `run REQUEST\|- --json [--dry-run] [--workspace DIR] [--allowed-input ROOT] [--ffmpeg-skill DIR] [--timeout S] [--no-reuse] [--cleanup keep\|intermediates]` | yes | yes | 0 / error exit code |
 
 The ffmpeg-skill checkout is found from `--ffmpeg-skill`, else `AUDIO_PRODUCTION_FFMPEG_SKILL_DIR`,
 `VIDEO_AGENT_FFMPEG_SKILL_DIR`, `~/.claude/skills/ffmpeg-skill`, `./vendor/ffmpeg-skill`, `../ffmpeg-skill`. It is
@@ -331,7 +331,9 @@ tests may call ffmpeg; the skill never does). Measured on ffmpeg 6.1.1 / ffmpeg-
   ffmpeg-skill's doctor does not probe them; they are verified by output validation at run time. On FFmpeg ≥ 8.0
   ffmpeg-skill 0.9's doctor parses no filters at all (`-filters` prints two flag characters, its pattern expects
   three), so *every* filter capability is `unknown` there (`checks.filter_detection`), never falsely `unsupported`.
-- No cache eviction: the work directory grows until the caller removes `<workspace>/.audio-production/<project_id>/`.
+- Intermediates are kept by default so identical re-runs reuse them; `run --cleanup intermediates` removes the
+  project's work directory after a fully successful run (never on failure, never outputs; reported under `cleanup`
+  in the response). There is no age- or size-based eviction across projects.
 
 ## Future extensions (not in this release)
 
