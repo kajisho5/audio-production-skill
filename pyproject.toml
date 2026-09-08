@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "audio-production-skill"
-version = "0.2.0"
+version = "0.3.0"
 description = "Deterministic audio production execution Skill (gain, trim, cut, silence removal, fades, loudness normalisation, mix, channel conversion, noise reduction) on top of ffmpeg-skill. Not an AI agent."
 readme = "README.md"
 license = {text = "MIT"}

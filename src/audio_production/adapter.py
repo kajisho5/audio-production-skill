@@ -11,11 +11,17 @@
 
 Which ffmpeg-skill tools are used, and for what (docs/ffmpeg-skill.md):
   probe     input facts and output validation
-  audio     GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, MIX (--music), format conversion / extraction
+  audio     GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS (each takes --audio-stream N,
+            since ffmpeg-skill 0.9.1, to pick which audio stream of their one input to process; default 0), MIX
+            (--music, always stream 0 of each already-resolved input), format conversion / extraction
   cut       TRIM (--start/--end), CUT / SILENCE_REMOVE (--segments = kept ranges), always --accurate (sample precision)
   loudness  NORMALIZE (-I/--tp/--lra/--sample-rate); verification reads the `result` field of that same call's
             --json response (ffmpeg-skill >= 0.12.0), no separate --measure-only process
-  join      CONCAT (--transition none | fade --duration, --sample-rate, --channels)"""
+  join      CONCAT (--transition none | fade --duration, --sample-rate, --channels)
+
+TRIM/CUT/SILENCE_REMOVE (cut.py), NORMALIZE (loudness.py) and CONCAT (join.py) have no --audio-stream flag in
+ffmpeg-skill (0.12.0 CHANGELOG: combining separate files is "a different problem shape"); MIX does not get one
+either, for the same reason."""
 from __future__ import annotations
 
 import json
@@ -43,7 +49,8 @@ FLAGS_USED: Dict[str, Tuple[str, ...]] = {
     "audio": ("input", "output", "gain", "fade_in", "fade_out", "mono", "stereo", "downmix", "denoise", "denoise_strength", "music", "music_volume", "json",
               "compress", "comp_threshold", "comp_ratio", "comp_attack", "comp_release", "comp_makeup", "comp_knee",
               "limit", "limit_ceiling", "limit_attack", "limit_release",
-              "gate", "gate_threshold", "gate_ratio", "gate_attack", "gate_release", "gate_range", "gate_knee"),
+              "gate", "gate_threshold", "gate_ratio", "gate_attack", "gate_release", "gate_range", "gate_knee",
+              "audio_stream"),
     "cut": ("input", "output", "start", "end", "segments", "accurate", "json"),
     "loudness": ("input", "output", "lufs", "tp", "lra", "sample_rate", "json"),
     "join": ("inputs", "output", "transition", "duration", "sample_rate", "channels", "json"),

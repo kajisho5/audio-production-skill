@@ -322,7 +322,11 @@ re-verified against ffmpeg-skill 0.12.2, which is what CI's pinned commit `336e0
 
 ## Current limitations
 
-- Only the first audio stream of a source is used (no `audio_stream` selection yet).
+- `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION` and `DYNAMICS` take an `audio_stream`
+  parameter (0-based, default 0) selecting which audio stream of their one input to process (ffmpeg-skill/audio
+  `--audio-stream`). `TRIM`, `CUT`, `SILENCE_REMOVE`, `NORMALIZE`, `MIX` and `CONCAT` always use the first audio
+  stream: ffmpeg-skill's `cut` / `loudness` / `join` tools have no `--audio-stream` flag, and `MIX` folds already-
+  resolved inputs through `--music`, which always reads stream 0 of each bed file.
 - Every artifact's duration is validated within 0.1 s. Cuts are sample-accurate on PCM sources; on compressed
   sources the boundary depends on the decoder's priming handling (AAC: exact on ffmpeg 6.1, −12 ms on the Windows
   CI runner's FFmpeg), and CONCAT / MIX / export may differ by a codec frame (measured +8–10 ms with AAC sources).
@@ -339,9 +343,11 @@ re-verified against ffmpeg-skill 0.12.2, which is what CI's pinned commit `336e0
 
 ## Future extensions (not in this release)
 
-Typed channel mapping, standalone resampling, audio-stream selection, more noise-reduction modes with detected
-capabilities, per-input pan in MIX, 24-bit intermediates — each requires a corresponding capability in ffmpeg-skill's
-public contract (or a decision to add a second execution backend), and will be declared only once implemented and tested.
+Typed channel mapping, standalone resampling, more noise-reduction modes with detected capabilities, per-input pan
+in MIX, 24-bit intermediates — each requires a corresponding capability in ffmpeg-skill's public contract (or a
+decision to add a second execution backend), and will be declared only once implemented and tested. (Audio-stream
+selection is no longer on this list: `ffmpeg-skill/audio --audio-stream` has existed since 0.9.1, and `audio_stream`
+is implemented above on every operation that reads its input through `audio.py`.)
 
 Repository guide for future sessions: [CLAUDE.md](CLAUDE.md); current / experimental / planned state:
 [docs/STATE.md](docs/STATE.md); contract versioning: [docs/contract.md](docs/contract.md).

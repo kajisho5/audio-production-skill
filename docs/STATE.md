@@ -5,8 +5,10 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 
 ## CURRENT (main)
 
-- Skill `audio-production` 0.2.0, contract `audio-production/contract@1`, one tool `audio-production/run`, 14
+- Skill `audio-production` 0.3.0, contract `audio-production/contract@1`, one tool `audio-production/run`, 14
   operation types; sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
+  `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS` take `audio_stream`
+  (0-based, default 0) to pick which audio stream of their one input `ffmpeg-skill/audio` processes.
 - Execution through ffmpeg-skill 0.12.0 ≤ v < 1.0 (`probe`, `audio`, `cut --accurate`, `loudness`, `join`); NORMALIZE
   verification reads the `result` field of the NORMALIZE call's own `--json` response (ADR-13), no second process.
 - CLI `skill | contract [--check [FILE|-]]`, `doctor`, `validate`, `plan`, `run` (`--cleanup keep|intermediates`) with
@@ -25,19 +27,17 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 
 ## PLANNED / candidates (highest value first)
 
-1. Audio-stream selection (`tracks[].audio_stream`): ffmpeg-skill `audio.py --audio-stream` exists (since 0.9.1) and
-   is the only path — 0.12.0 deliberately excluded `cut`, `loudness` and `join` from `--audio-stream` support (they
-   combine separate files, "a different problem shape"), so this is extraction-first for every multi-stream source,
-   not an ffmpeg-skill change. Implementable now with the already-required ffmpeg-skill version. Not started.
-2. A release tag / GitHub release for 0.1.0 once the human decides on distribution (PyPI is not set up; nothing is
+1. A release tag / GitHub release for 0.1.0 once the human decides on distribution (PyPI is not set up; nothing is
    published). Do not claim availability.
-3. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
+2. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
 
 ## Known limitations (see README "Current limitations")
 
-First audio stream only; artifact durations validated within 0.1 s (cuts sample-accurate on PCM, AAC sources up to
-one codec frame short on FFmpeg 8 / Windows); 16-bit PCM intermediates; MIX duration follows the first input; lossy
-outputs may overshoot the true-peak ceiling; core filters reported `unknown` by doctor; no eviction.
+`TRIM`/`CUT`/`SILENCE_REMOVE`/`NORMALIZE`/`MIX`/`CONCAT` always use the first audio stream (their ffmpeg-skill tools
+have no `--audio-stream`, or, for `MIX`, combine already-resolved inputs); artifact durations validated within 0.1 s
+(cuts sample-accurate on PCM, AAC sources up to one codec frame short on FFmpeg 8 / Windows); 16-bit PCM
+intermediates; MIX duration follows the first input; lossy outputs may overshoot the true-peak ceiling; core filters
+reported `unknown` by doctor; no eviction.
 
 ## OS integration status
 
@@ -57,3 +57,13 @@ outputs may overshoot the true-peak ceiling; core filters reported `unknown` by 
   audio-stream-selection PLANNED item; fixed README's example `ffmpeg-skill` version; repinned CI's ffmpeg-skill
   checkout from commit `2abd89c` (0.9.1) to `336e0c4` (0.12.2) so CI actually satisfies the new `SUPPORTED_MIN`
   (issue #6 item 5) — the full suite (97 tests) was already run and passed against that same checkout locally.
+- 2026-09-08 (#8): `audio_stream` (0-based, default 0) added to `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`,
+  `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS` — the operations whose one input is read directly by `ffmpeg-skill/audio`
+  — threaded to `--audio-stream N` in the executor's argv, folded into operation identity like every other
+  parameter (no separate change needed there), and added to `adapter.FLAGS_USED["audio"]`; `TRIM`/`CUT`/
+  `SILENCE_REMOVE`/`NORMALIZE`/`MIX`/`CONCAT` deliberately excluded (their ffmpeg-skill tools have no
+  `--audio-stream`, or, for `MIX`, fold already-resolved inputs). Adding a parameter to a pinned operation's schema
+  is breaking per `contract_check.PINNED_OPERATION_FIELDS`, so `VERSION` bumped to `0.3.0` (`pyproject.toml` too)
+  and `tests/contract/contract.json` regenerated — video-production-agent must re-pin. Closed the audio-stream-
+  selection PLANNED item; corrected README "Future extensions" / docs/ffmpeg-skill.md's compatibility-gap table,
+  which had framed it as blocked on a future ffmpeg-skill capability that has existed since 0.9.1.
