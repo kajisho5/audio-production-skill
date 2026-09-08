@@ -13,7 +13,8 @@ Which ffmpeg-skill tools are used, and for what (docs/ffmpeg-skill.md):
   probe     input facts and output validation
   audio     GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, MIX (--music), format conversion / extraction
   cut       TRIM (--start/--end), CUT / SILENCE_REMOVE (--segments = kept ranges), always --accurate (sample precision)
-  loudness  NORMALIZE (-I/--tp/--lra/--sample-rate) and --measure-only for verification
+  loudness  NORMALIZE (-I/--tp/--lra/--sample-rate); verification reads the `result` field of that same call's
+            --json response (ffmpeg-skill >= 0.12.0), no separate --measure-only process
   join      CONCAT (--transition none | fade --duration, --sample-rate, --channels)"""
 from __future__ import annotations
 
@@ -31,7 +32,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 from .errors import AudioError
 
 SUPPORTED_CONTRACT_VERSION = "1.0"
-SUPPORTED_MIN = (0, 9, 1)     # 0.9.0 wrote AAC packets into .wav on audio cuts and could not extract audio from video
+SUPPORTED_MIN = (0, 12, 0)    # loudness.py's --json response includes the post-normalization `result` (ADR-13);
+                              # 0.9.0 wrote AAC packets into .wav on audio cuts and could not extract audio from video
 SUPPORTED_MAX_EXCLUSIVE = (1, 0, 0)
 ENV_DIR_KEYS = ("AUDIO_PRODUCTION_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
 TOOLS_USED = ("probe", "audio", "cut", "loudness", "join")
@@ -43,7 +45,7 @@ FLAGS_USED: Dict[str, Tuple[str, ...]] = {
               "limit", "limit_ceiling", "limit_attack", "limit_release",
               "gate", "gate_threshold", "gate_ratio", "gate_attack", "gate_release", "gate_range", "gate_knee"),
     "cut": ("input", "output", "start", "end", "segments", "accurate", "json"),
-    "loudness": ("input", "output", "lufs", "tp", "lra", "sample_rate", "measure_only", "json"),
+    "loudness": ("input", "output", "lufs", "tp", "lra", "sample_rate", "json"),
     "join": ("inputs", "output", "transition", "duration", "sample_rate", "channels", "json"),
 }
 _ENV_KEEP = ("PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TERM",
@@ -245,18 +247,6 @@ class FfmpegSkill:
         if code != 0 or not isinstance(data, dict) or "duration" not in data:
             raise AudioError("INVALID_INPUT", f"ffmpeg-skill/probe could not read {os.path.basename(path)}: {err.strip().splitlines()[-1] if err.strip() else 'no output'}",
                              {"reason": "unreadable_media", "path": path, "exit_code": code})
-        return data
-
-    def measure_loudness(self, path: str, lufs: float, tp: float, lra: Optional[float], timeout: Optional[float] = None) -> Dict[str, Any]:
-        args = [path, "--measure-only", "-I", fmt_db(lufs), "--tp", fmt_db(tp)]
-        if lra is not None:
-            args += ["--lra", fmt_db(lra)]
-        argv = [sys.executable, self.script("loudness"), *args]
-        code, out, err, seconds = self._popen(argv, timeout or self.timeout)
-        data = _parse_json(out)
-        self.runs.append(ToolRun("loudness", argv, code, data, "\n".join(err.strip().splitlines()[-12:]), seconds))
-        if code != 0 or not isinstance(data, dict):
-            raise AudioError("TOOL_ERROR", "ffmpeg-skill/loudness --measure-only failed", {"reason": "tool_failed", "exit_code": code, "stderr_tail": err[-800:]})
         return data
 
 

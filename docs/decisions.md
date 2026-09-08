@@ -36,10 +36,22 @@
   pattern (video-editing-skill `contract --check`, video-production-agent `DRIFT_KEYS`): the pinned blocks are exactly
   what the agent compares plus `operations` and `provides`, so this repository fails its own CI before a change can
   silently make the agent mark the Skill MISSING. `version` is pinned too: a bump is coordinated with the agent's
-  re-pin, and additive keys (like `provides`) stay within a version. The OS specification behind `provides` is a
-  draft branch; it is labelled EXPERIMENTAL here (docs/STATE.md) until the OS merges it.
+  re-pin, and additive keys (like `provides`) stay within a version. The OS specification behind `provides` lives on
+  `AI-video-production-OS`'s `main`; `provides` is labelled EXPERIMENTAL here (docs/STATE.md) until a consumer there
+  actually resolves it.
 - **ADR-12 Cleanup is an operator flag, not a request option.** video-production-agent pins the whole `request`
   and `response` contract blocks; adding `options.cleanup` would be breaking for its pin for a purely local
   housekeeping choice. `run --cleanup intermediates` removes the project's work directory only after every output
   is exported and validated (never on failure, never outputs), reports it under a new response key `cleanup`, and is
   described by the additive contract key `cleanup`. Age / size eviction across projects stays with the operator.
+- **ADR-13 `_verify_loudness` reads the NORMALIZE call's own `result`, not a second `--measure-only` process.**
+  ffmpeg-skill 0.12.0 added the post-normalization measurement (`result`) to `loudness.py`'s `--json` response for
+  every NORMALIZE call, closing the gap that used to require a separate `--measure-only` process purely to learn
+  the achieved loudness (doubling every `loudnorm` pass). This was never a deliberate "never trust the tool's
+  self-report" security measure — the second call re-ran the same tool against the same artifact it had just
+  written, so it verified nothing a compromised or buggy ffmpeg-skill could not also have faked the first time; it
+  was a workaround for a limitation ffmpeg-skill has since fixed. `adapter.SUPPORTED_MIN` moves to `(0, 12, 0)`
+  since `result` did not exist before (ADR-9's rule: raise the minimum only once the older version is actually
+  unsafe/insufficient, not kept as a permanent workaround). `adapter.measure_loudness` and the `measure_only` flag
+  in `FLAGS_USED` are removed as dead code. Breaking for the pinned `ffmpeg_skill` contract block; `VERSION` bumps
+  to `0.2.0` and `tests/contract/contract.json` is regenerated (video-production-agent must re-pin).

@@ -17,8 +17,9 @@ audio-production plan - --json             # dry run: graph, tool selection, exp
 audio-production run - --json              # execute (stdin: request document; stdout: exactly one response document)
 ```
 
-Requirements: Python 3.9+, standard library only; an **ffmpeg-skill** checkout (0.9.1 ≤ version < 1.0, contract 1.0;
-0.9.0 is refused because its audio cuts could write AAC packets into `.wav`) and FFmpeg (`ffmpeg` + `ffprobe`) on
+Requirements: Python 3.9+, standard library only; an **ffmpeg-skill** checkout (0.12.0 ≤ version < 1.0, contract 1.0;
+versions below 0.12.0 are refused — 0.9.0's audio cuts could write AAC packets into `.wav`, and versions before
+0.12.0 lack the `result` field this skill reads for NORMALIZE verification) and FFmpeg (`ffmpeg` + `ffprobe`) on
 PATH for ffmpeg-skill. Install: `pip install -e .`
 
 ## What it is, and what it is not
@@ -100,8 +101,8 @@ Skill exposes one execution tool), and a `lifecycle`. This is a different vocabu
 is for `kajisho5/AI-video-production-OS`'s `CapabilityContract.provides` (see that project's `docs/SPEC.md` and
 `docs/decisions.md` ADR-10 here), so a registry can resolve "who provides `audio.gain`" without hardcoding this
 repository. It is additive and derived from `model.OPERATION_TYPES`; see ADR-10. Status: EXPERIMENTAL — the OS
-specification it follows is a draft on that repository's `claude/ai-video-production-os-arch-fck6fy` branch, not on
-its `main`; the ids are kept in sync with that draft's `docs/CAPABILITY_MATRIX.md`.
+specification it follows lives on that repository's `main` (`docs/SPEC.md`, `docs/CAPABILITY_MATRIX.md`); the ids
+are kept in sync with `docs/CAPABILITY_MATRIX.md` there.
 
 ### Input schema (`audio-production/request@1`)
 
@@ -150,20 +151,20 @@ its `main`; the ids are kept in sync with that draft's `docs/CAPABILITY_MATRIX.m
 
 ```json
 {
-  "schema": "audio-production/response@1", "skill": {"id": "audio-production", "version": "0.1.0"},
+  "schema": "audio-production/response@1", "skill": {"id": "audio-production", "version": "0.2.0"},
   "ok": true, "status": "ok", "dry_run": false,
-  "plan": {"plan_id": "<sha256>", "graph": {"order": ["track:voice", "op:trim", "..."]}, "steps": ["..."], "required_capabilities": ["..."], "tool_versions": {"ffmpeg-skill": "0.9.0", "ffmpeg": "6.1.1"}},
+  "plan": {"plan_id": "<sha256>", "graph": {"order": ["track:voice", "op:trim", "..."]}, "steps": ["..."], "required_capabilities": ["..."], "tool_versions": {"ffmpeg-skill": "0.12.2", "ffmpeg": "6.1.1"}},
   "results": [{
     "node_id": "op:master", "operation_id": "<sha256>", "type": "NORMALIZE", "tool": "ffmpeg-skill/loudness", "status": "completed",
     "parameters": {"target_lufs": -16.0, "true_peak_db": -1.5, "tolerance_lufs": 1.0, "profile": "podcast"},
     "inputs": ["op:fade"], "input_hashes": ["<sha256>"],
     "segments": [{"timeline": {"start": 0.0, "end": 3597.9}, "source_id": "mic", "source": {"start": 14.1, "end": 3612.0}, "input_index": 0}, "..."],
     "artifact": {"path": ".../.audio-production/talk-42/<id16>.wav", "duration": 3597.9, "channels": 1, "sample_rate": 48000, "codec": "pcm_s16le", "size": 0, "sha256": "<sha256>"},
-    "measurements": {"loudness": {"measured_by": "ffmpeg-skill/loudness --measure-only", "integrated_lufs": -16.0, "true_peak_dbtp": -1.6, "loudness_range_lu": 6.2}},
+    "measurements": {"loudness": {"measured_by": "ffmpeg-skill/loudness (NORMALIZE result)", "integrated_lufs": -16.0, "true_peak_dbtp": -1.6, "loudness_range_lu": 6.2}},
     "tool_commands_observed": ["ffmpeg ..."], "seconds": 12.3
   }],
   "outputs": [{"output_id": "master", "status": "completed", "path": ".../deliver/talk-42.wav", "format": "wav", "artifact": {"sha256": "<sha256>"}, "segments": ["..."],
-               "provenance": {"skill": "audio-production", "skill_version": "0.1.0", "tool": "ffmpeg-skill/audio", "tool_versions": {}, "output_hash": "<sha256>",
+               "provenance": {"skill": "audio-production", "skill_version": "0.2.0", "tool": "ffmpeg-skill/audio", "tool_versions": {}, "output_hash": "<sha256>",
                               "operation_id": "<sha256>", "operations": ["output -> operation -> ... -> source, with hashes and status"], "sources": {"mic": {"sha256": "<sha256>"}}}}],
   "tool_runs": [{"tool": "ffmpeg-skill/probe", "exit_code": 0, "seconds": 0.1, "commands_observed": []}],
   "warnings": []
@@ -305,8 +306,9 @@ Windows and macOS with a real FFmpeg and a fresh ffmpeg-skill clone: [.github/wo
 `source → TRIM → GAIN → FADE_OUT → NORMALIZE → output validation` on a generated 6 s / 48 kHz PCM fixture through the
 real ffmpeg-skill and FFmpeg and asserts duration, channels, sample rate, hashes and the re-measured loudness;
 `test_mix_two_sources_then_normalize` runs `A → GAIN, B (range, gain) → MIX → NORMALIZE`; `test_concat`, `test_dynamics`
-and the video-container cases cover the 0.9.1 capabilities. Fixtures are synthesised with ffmpeg at test time (the
-tests may call ffmpeg; the skill never does). Measured on ffmpeg 6.1.1 / ffmpeg-skill 0.9.1 (and FFmpeg 8 in CI).
+and the video-container cases cover the 0.12.0 capabilities this skill requires. Fixtures are synthesised with ffmpeg
+at test time (the tests may call ffmpeg; the skill never does). Measured on ffmpeg 6.1.1 / ffmpeg-skill 0.9.1, and
+re-verified against ffmpeg-skill 0.12.2, which is what CI's pinned commit `336e0c4` now runs.
 
 ## Relationship to the other skills
 

@@ -457,15 +457,18 @@ class Executor:
             if stale.exists():
                 stale.unlink()
         try:
+            loudness_data: Optional[Dict[str, Any]] = None
             for tool, args in self._argv(st, states, sources, out_path):
                 run = self.skill.run_tool(tool, args, timeout)
                 st.seconds += run.seconds
                 st.tool_commands += run.commands
                 if tool == "cut" and isinstance(run.data.get("precision"), str):
                     st.measurements["cut"] = {"precision": run.data["precision"], "duration_error_ms": run.data.get("duration_error_ms"), "reencoded": run.data.get("reencoded")}
+                if tool == "loudness":
+                    loudness_data = run.data
             st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources))
             if node.type == "NORMALIZE":
-                self._verify_loudness(st, timeout)
+                self._verify_loudness(st, loudness_data)
         except AudioError:
             self._remove_partial(out_path)
             raise
@@ -549,17 +552,21 @@ class Executor:
             raise AudioError("VALIDATION_ERROR", f"{what}: output codec {codec!r} is not {want!r}", {"reason": "codec_mismatch", "path": str(path)})
         return Artifact(path, duration, channels, sr, codec, size, sha256_file(str(path)), audio.get("channel_layout"))
 
-    def _verify_loudness(self, st: NodeState, timeout: Optional[float]) -> None:
+    def _verify_loudness(self, st: NodeState, tool_data: Optional[Dict[str, Any]]) -> None:
+        # ffmpeg-skill >= 0.12.0's loudness.py --json includes the post-normalization measurement (`result`) in the
+        # NORMALIZE call's own response, so no second `--measure-only` process is needed to learn what was achieved.
         p = st.node.parameters
-        assert st.artifact is not None
-        m = self.skill.measure_loudness(str(st.artifact.path), p["target_lufs"], p["true_peak_db"], p.get("loudness_range_lu"), timeout)
-        measured: Dict[str, Any] = {"silent": bool(m.get("silent"))}
+        result = (tool_data or {}).get("result")
+        if not isinstance(result, dict):
+            raise AudioError("TOOL_ERROR", f"NORMALIZE {st.node.node_id}: ffmpeg-skill/loudness response has no 'result' field (requires ffmpeg-skill >= 0.12.0)",
+                             {"reason": "loudness_result_missing"})
+        measured: Dict[str, Any] = {"silent": bool(result.get("silent"))}
         for key, name in (("input_i", "integrated_lufs"), ("input_tp", "true_peak_dbtp"), ("input_lra", "loudness_range_lu")):
             try:
-                measured[name] = float(m[key]) if m.get(key) not in (None, "-inf", "inf") else None
+                measured[name] = float(result[key]) if result.get(key) not in (None, "-inf", "inf") else None
             except (TypeError, ValueError, KeyError):
                 measured[name] = None
-        st.measurements["loudness"] = {"measured_by": "ffmpeg-skill/loudness --measure-only", "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"],
+        st.measurements["loudness"] = {"measured_by": "ffmpeg-skill/loudness (NORMALIZE result)", "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"],
                                        "tolerance_lufs": p.get("tolerance_lufs"), **measured}
         tol = p.get("tolerance_lufs")
         if tol is not None:

@@ -1,8 +1,8 @@
 # ffmpeg-skill relationship
 
 audio-production-skill is a client of ffmpeg-skill's **public contract** (`ffmpeg-skill contract --json`,
-`contract_version 1.0`, verified against ffmpeg-skill 0.9.1 at commit `2abd89c`; 0.9.0 is refused, see below). It
-never calls `ffmpeg` or `ffprobe` itself.
+`contract_version 1.0`, verified against ffmpeg-skill 0.9.1 at commit `2abd89c` and again against 0.12.2; versions
+below 0.12.0 are refused, see below). It never calls `ffmpeg` or `ffprobe` itself.
 
 ## Tools and flags used
 
@@ -11,22 +11,27 @@ never calls `ffmpeg` or `ffprobe` itself.
 | `ffmpeg-skill/probe` | source facts, every output validation | positional input |
 | `ffmpeg-skill/audio` | GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, MIX, audio extraction from video, export | `--gain`, `--fade-in`, `--fade-out`, `--mono`, `--stereo`, `--downmix`, `--denoise`, `--denoise-strength`, `--music`, `--music-volume`, `--gate/--gate-*`, `--compress/--comp-*`, `--limit/--limit-*`, `-o`, `--json` |
 | `ffmpeg-skill/cut` | TRIM, CUT, SILENCE_REMOVE | `--start`, `--end`, `--segments`, `--accurate`, `-o`, `--json` |
-| `ffmpeg-skill/loudness` | NORMALIZE and its verification | `-I`, `--tp`, `--lra`, `--sample-rate`, `--measure-only`, `-o`, `--json` |
+| `ffmpeg-skill/loudness` | NORMALIZE, verified from that same call's `--json` `result` field | `-I`, `--tp`, `--lra`, `--sample-rate`, `-o`, `--json` |
 | `ffmpeg-skill/join` | CONCAT | positional inputs, `--transition none|fade`, `--duration`, `--sample-rate`, `--channels`, `-o`, `--json` |
 
 `doctor` checks that the located ffmpeg-skill declares these tools with `audio_only: true` and that every flag exists
 in the tool's generated `input_schema`; a mismatch is a `fail` and `run` refuses with `TOOL_ERROR`
 (`ffmpeg_skill_incompatible`).
 
-## Why 0.9.1 is the minimum
+## Why 0.12.0 is the minimum
 
 Measured on 0.9.0: `cut --accurate` and the keyframe fallback re-encoded audio with AAC even into a `.wav`
 container, `cut -c copy` copied compressed packets into `.wav`, `audio.py` always mapped the video stream so a video
 container could not yield an audio-only output, `join` required video, there were no typed dynamics, and the doctor
-reported every filter missing on FFmpeg ≥ 8. 0.9.1 fixes all of these (its CHANGELOG); the adapter's version window
-is therefore `[0.9.1, 1.0.0)`.
+reported every filter missing on FFmpeg ≥ 8. 0.9.1 fixed all of these (its CHANGELOG), and the adapter's minimum was
+0.9.1 for a while on that basis. 0.12.0 added the post-normalization measurement (`result`) to `loudness.py`'s
+`--json` response for a NORMALIZE call (previously only available via a second `--measure-only` process); this
+skill's `_verify_loudness` now reads it directly (ADR-13, docs/decisions.md) instead of re-running `loudness.py`,
+so the adapter's version window is `[0.12.0, 1.0.0)`. A checkout in `[0.9.1, 0.12.0)` still runs the two-pass
+NORMALIZE fine but its `loudness.py --json` has no `result` field, which this skill would otherwise misread as a
+missing measurement — hence the raised floor rather than a feature-detection fallback.
 
-## Observed behaviour this skill relies on (measured, ffmpeg-skill 0.9.1 / ffmpeg 6.1.1)
+## Observed behaviour this skill relies on (measured, ffmpeg-skill 0.9.1 / ffmpeg 6.1.1, and 0.12.2)
 
 - `audio.py` without processing flags re-encodes the first audio stream to the codec of the output extension
   (`.wav` → `pcm_s16le`, `.flac`, `.mp3` → libmp3lame, `.m4a`/`.aac` → aac, `.ogg` → libvorbis, `.opus` → libopus):
@@ -46,8 +51,9 @@ is therefore `[0.9.1, 1.0.0)`.
   converted to linear by ffmpeg-skill); order gate → compressor → limiter.
 - `audio.py <video> -o x.wav` drops the picture and extracts the first audio track; this is how SOURCE_TRACK nodes
   of video containers are materialised.
-- `loudness.py` refuses silent inputs (`input audio is silent`) → `TOOL_ERROR`; `--measure-only` prints
-  `{input_i, input_tp, input_lra, input_thresh, target_offset}` as strings.
+- `loudness.py` refuses silent inputs (`input audio is silent`) → `TOOL_ERROR`; a normal (non-`--measure-only`)
+  call's `--json` response includes a `result` field (`{input_i, input_tp, input_lra, input_thresh, target_offset,
+  silent}`, ffmpeg-skill >= 0.12.0) with the post-normalization measurement, which `_verify_loudness` reads directly.
 - Failure document: `{"status": "failed", "error": {"kind": "input|ffmpeg|missing_tool", "message"}}` with a non-zero
   exit; parsed into `TOOL_ERROR` with `details.error_kind`.
 
@@ -57,7 +63,7 @@ is therefore `[0.9.1, 1.0.0)`.
 |---|---|---|
 | CHANNEL_MAP (arbitrary mapping / pan) | only `--mono`, `--stereo`, `--downmix` | provided as MONO / STEREO / DOWNMIX; `CHANNEL_MAP` not implemented |
 | RESAMPLE (standalone) | `audio.py` has no sample-rate flag; only `loudness.py --sample-rate` and `join.py --sample-rate` | `NORMALIZE.sample_rate`, `CONCAT.sample_rate`; `RESAMPLE` not implemented; outputs may declare `expect.sample_rate` for verification |
-| audio stream selection | only `audio.py --audio-stream`; `cut.py` / `loudness.py` / `join.py` take the first stream | first audio stream only (follow-up) |
+| audio stream selection | `--audio-stream` exists on `audio.py` (since 0.9.1) and, since 0.12.0, `overlay.py`/`graphics.py`/`color.py`/`fit.py`; `cut.py`/`loudness.py`/`join.py` deliberately exclude it (0.12.0 CHANGELOG: combining separate files is "a different problem shape") | not a gap this skill is blocked on — extraction-first via `audio.py --audio-stream N` is implementable now; not yet implemented (PLANNED, docs/STATE.md) |
 | MIX per-input pan, more than one bed per call | `--music` takes one file | pairwise fold; no pan |
 | 24-bit intermediates | `.wav` → `pcm_s16le` fixed | 16-bit PCM intermediates |
 | capability detection of core filters (`volume`, `afade`, `amix`, `pan`, `aformat`) | ffmpeg-skill doctor lists only its own table | reported `unknown`, verified per run |

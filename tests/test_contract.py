@@ -105,7 +105,7 @@ def test_pinned_contract_matches_live():
 def test_drift_classification():
     live = skill_contract()
     # breaking: a pinned block, an operation parameter, a removed operation, the version, a removed key anywhere
-    m = copy.deepcopy(live); m["version"] = "0.2.0"
+    m = copy.deepcopy(live); m["version"] = live["version"] + "-test"        # any value different from the live version
     assert any(x.startswith("version") for x in contract_drift(m)["breaking"])
     m = copy.deepcopy(live); m["operations"][0]["parameters"]["extra"] = {"type": "number", "required": False, "description": "x"}
     assert any(x.startswith("operations/") for x in contract_drift(m)["breaking"])
