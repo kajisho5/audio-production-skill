@@ -366,7 +366,7 @@ class Executor:
             raise AudioError("INTERNAL_ERROR", f"{node.type} has no inputs")
         src: str = self._artifact_path(states[node.inputs[0]], sources)
         if node.type == "GAIN":
-            return [("audio", [src, "--gain", fmt_db(p["gain_db"]), "-o", o])]
+            return [("audio", [src, "--gain", fmt_db(p["gain_db"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type in ("TRIM", "CUT", "SILENCE_REMOVE"):
             # ffmpeg-skill/cut --accurate: sample-accurate re-encode (atrim) to PCM WAV; a compressed or video-container
             # source is decoded on the way (ffmpeg-skill >= 0.9.1)
@@ -380,9 +380,9 @@ class Executor:
                 return [("cut", [src, "--start", fmt_seconds(keep[0].start), "--end", fmt_seconds(keep[0].end), "--accurate", "-o", o])]
             return [("cut", [src, "--segments", ",".join(f"{fmt_seconds(k.start)}-{fmt_seconds(k.end)}" for k in keep), "--accurate", "-o", o])]
         if node.type == "FADE_IN":
-            return [("audio", [src, "--fade-in", fmt_seconds(p["duration"]), "-o", o])]
+            return [("audio", [src, "--fade-in", fmt_seconds(p["duration"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "FADE_OUT":
-            return [("audio", [src, "--fade-out", fmt_seconds(p["duration"]), "-o", o])]
+            return [("audio", [src, "--fade-out", fmt_seconds(p["duration"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "NORMALIZE":
             args = [src, "-I", fmt_db(p["target_lufs"]), "--tp", fmt_db(p["true_peak_db"])]
             if "loudness_range_lu" in p:
@@ -391,13 +391,13 @@ class Executor:
                 args += ["--sample-rate", str(int(p["sample_rate"]))]
             return [("loudness", args + ["-o", o])]
         if node.type == "MONO":
-            return [("audio", [src, "--mono", "-o", o])]
+            return [("audio", [src, "--mono", "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "STEREO":
-            return [("audio", [src, "--stereo", "-o", o])]
+            return [("audio", [src, "--stereo", "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "DOWNMIX":
-            return [("audio", [src, "--downmix", "-o", o])]
+            return [("audio", [src, "--downmix", "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "NOISE_REDUCTION":
-            return [("audio", [src, "--denoise", "--denoise-strength", fmt_db(p["strength_db"]), "-o", o])]
+            return [("audio", [src, "--denoise", "--denoise-strength", fmt_db(p["strength_db"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "DYNAMICS":
             args = [src]
             for stage, flag, prefix in (("gate", "--gate", "gate"), ("compressor", "--compress", "comp"), ("limiter", "--limit", "limit")):
@@ -406,7 +406,7 @@ class Executor:
                 args.append(flag)
                 for key, value in sorted(p[stage].items()):
                     args += [f"--{prefix}-{key.replace('_db', '').replace('_ms', '')}", fmt_db(value) if key.endswith("_db") else fmt_seconds(value)]
-            return [("audio", args + ["-o", o])]
+            return [("audio", args + ["--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "CONCAT":
             args = [self._artifact_path(states[i], sources) for i in node.inputs]
             xf = p.get("crossfade", 0.0)

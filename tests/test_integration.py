@@ -33,6 +33,16 @@ def op(op_id, typ, inputs, **params):
     return {"op_id": op_id, "type": typ, "inputs": inputs, "parameters": params}
 
 
+def mean_volume_dbfs(path):
+    """mean_volume in dBFS, measured with ffmpeg's own volumedetect (test-only tool; the skill under test never
+    calls ffmpeg directly). Used to prove which of two distinct, known-level audio streams an operation actually
+    read -- an objective signal, not just "the run did not error"."""
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    line = next(l for l in r.stderr.splitlines() if "mean_volume" in l)
+    return float(line.split(":")[1].strip().split(" ")[0])
+
+
 def results(d):
     return {r["node_id"]: r for r in d["results"]}
 
@@ -167,6 +177,47 @@ def test_dynamics(workspace):
     for bad in ({}, {"compressor": {"ratio": 50}}, {"compressor": {"threshold_db": -20, "filter": "x"}}, {"limiter": {"ceiling_db": "0dB"}}, {"expander": {"ratio": 2}}):
         code, d = run(request_doc([op("y", "DYNAMICS", ["track:t1"], **bad)]))
         assert d["ok"] is False and d["error"]["code"] == "INVALID_REQUEST", bad
+
+
+def test_audio_stream_selects_the_correct_track(workspace):
+    """multitrack.mka (fixtures/generate.py) muxes two mono streams with an objective, easy-to-measure difference:
+    stream 0 a quiet 300 Hz tone (mean_volume ~ -29 dBFS), stream 1 a loud 900 Hz tone (~ -9 dBFS), 20 dB apart.
+    audio_stream must make ffmpeg-skill/audio actually read the requested track, not merely run without error."""
+    sources = [{"source_id": "a", "path": "multitrack.mka"}]
+    # omitted and explicit 0 both mean the (quiet) first stream, matching ffmpeg-skill audio.py's own default
+    for params in ({}, {"audio_stream": 0}):
+        code, d = run(request_doc([op("g", "GAIN", ["track:t1"], gain_db=0, **params)], sources=sources))
+        assert d["ok"], d.get("error")
+        assert -31 < mean_volume_dbfs(workspace / "out" / "main.wav") < -27
+        assert results(d)["op:g"]["parameters"]["audio_stream"] == 0
+    # explicit 1 selects the (loud) second stream -- unambiguously a different track, not sampling noise
+    code, d = run(request_doc([op("g", "GAIN", ["track:t1"], gain_db=0, audio_stream=1)], sources=sources))
+    assert d["ok"], d.get("error")
+    assert -11 < mean_volume_dbfs(workspace / "out" / "main.wav") < -7
+    assert results(d)["op:g"]["parameters"]["audio_stream"] == 1
+    # every other operation that reaches ffmpeg-skill/audio directly threads audio_stream through the same way
+    code, d = run(request_doc([op("f", "FADE_IN", ["track:t1"], duration=0.01, audio_stream=1)], sources=sources))
+    assert d["ok"], d.get("error")
+    assert -11 < mean_volume_dbfs(workspace / "out" / "main.wav") < -7
+    code, d = run(request_doc([op("n", "NOISE_REDUCTION", ["track:t1"], mode="fft", strength_db=20, audio_stream=1)], sources=sources))
+    assert d["ok"], d.get("error")
+    assert mean_volume_dbfs(workspace / "out" / "main.wav") > -20      # denoised, but still clearly the loud stream
+    # two operations differing only in audio_stream do not collide in the intermediate cache (different identity);
+    # a dedicated project_id isolates this check's work directory from the runs above
+    code, d0 = run(request_doc([op("g", "GAIN", ["track:t1"], gain_db=0, audio_stream=0)], sources=sources, project_id="cache-check",
+                               outputs=[{"output_id": "main", "operation": "op:g", "path": "out/s0.wav", "format": "wav"}]))
+    code, d1 = run(request_doc([op("g", "GAIN", ["track:t1"], gain_db=0, audio_stream=1)], sources=sources, project_id="cache-check",
+                               outputs=[{"output_id": "main", "operation": "op:g", "path": "out/s1.wav", "format": "wav"}]))
+    assert d0["ok"] and d1["ok"]
+    assert results(d0)["op:g"]["operation_id"] != results(d1)["op:g"]["operation_id"]
+    assert results(d0)["op:g"]["artifact"]["sha256"] != results(d1)["op:g"]["artifact"]["sha256"]
+    assert len(list(workspace.glob(".audio-production/cache-check/*.wav"))) == 2   # both intermediates kept, neither overwrote the other
+    # out of range: ffmpeg-skill's own audio.py refuses (this fixture has streams 0..1)
+    code, d = run(request_doc([op("g", "GAIN", ["track:t1"], gain_db=0, audio_stream=5)], sources=sources))
+    assert d["error"]["code"] == "TOOL_ERROR" and not (workspace / "out").exists()
+    # negative / non-integer values never reach a tool at all
+    code, d = run(request_doc([op("g", "GAIN", ["track:t1"], gain_db=0, audio_stream=-1)], sources=sources))
+    assert d["error"]["code"] == "INVALID_REQUEST"
 
 
 def test_format_conversion_of_a_bare_track(workspace, skill_dir):

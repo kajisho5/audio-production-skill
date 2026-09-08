@@ -10,6 +10,7 @@ import pytest
 from audio_production import adapter, executor
 from audio_production.adapter import FfmpegSkill, fmt_db, fmt_seconds
 from audio_production.errors import AudioError
+from audio_production.model import validate_parameters
 from conftest import one_json, request_doc, run_cli
 
 SRC = Path(__file__).resolve().parent.parent / "src" / "audio_production"
@@ -187,10 +188,71 @@ def test_argv_builder_uses_only_numbers_and_resolved_paths(workspace):
     assert ex._argv(states["op:n"], states, sources, workspace / "o.wav")[0][1][1:-2] == ["-I", "-16.000", "--tp", "-1.000", "--lra", "7.000", "--sample-rate", "44100"]
     dyn = ex._argv(states["op:y"], states, sources, workspace / "o.wav")[0][1]
     assert dyn[1:-2] == ["--gate", "--gate-threshold", "-40.000", "--compress", "--comp-attack", "5.000", "--comp-knee", "3.000", "--comp-makeup", "2.000",
-                         "--comp-ratio", "4.000", "--comp-release", "80.000", "--comp-threshold", "-20.000", "--limit", "--limit-ceiling", "-1.000"]
+                         "--comp-ratio", "4.000", "--comp-release", "80.000", "--comp-threshold", "-20.000", "--limit", "--limit-ceiling", "-1.000",
+                         "--audio-stream", "0"]
     cat = ex._argv(states["op:k"], states, sources, workspace / "o.wav")[0]
     assert cat[0] == "join" and cat[1][2:] == ["--transition", "fade", "--duration", "0.500", "--sample-rate", "48000", "--channels", "2", "-o", str(workspace / "o.wav")]
     # a video-container source is extracted through ffmpeg-skill/audio, never handed to cut / join as a video
     sources["a"]["has_video"] = True
     states["track:t1"].artifact = None
     assert ex._argv(states["track:t1"], states, sources, workspace / "x.wav") == [("audio", [sources["a"]["path"], "-o", str(workspace / "x.wav")])]
+
+
+def test_audio_stream_threads_into_argv_only_for_single_input_audio_ops(workspace):
+    """--audio-stream N reaches ffmpeg-skill/audio for every operation whose one input it reads directly (GAIN,
+    FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS); TRIM/CUT/SILENCE_REMOVE (cut.py),
+    NORMALIZE (loudness.py) and CONCAT (join.py) have no such flag in ffmpeg-skill and never receive it."""
+    from audio_production.executor import Executor, NodeState
+    from audio_production.graph import OperationGraph
+    from audio_production.model import parse_request
+    from audio_production.security import PathPolicy
+    ex = Executor(PathPolicy(str(workspace)), FfmpegSkill(workspace))
+    sources = {"a": {"source_id": "a", "path": str(workspace / "tone.wav"), "sha256": "0" * 64, "size": 1, "duration": 6.0,
+                     "channels": 1, "sample_rate": 48000, "codec": "pcm_s16le", "channel_layout": None, "has_video": False}}
+
+    def argv_for(typ, params, plan=False):
+        ops = [{"op_id": "x", "type": typ, "inputs": ["track:t1"], "parameters": params}]
+        req = parse_request(request_doc(ops, outputs=[{"output_id": "o", "operation": "op:x", "path": "out/o.wav", "format": "wav"}]))
+        g = OperationGraph(req.project)
+        states = {n: NodeState(g.nodes[n]) for n in g.order}
+        if plan:                                                     # CUT / SILENCE_REMOVE's argv needs segments; the
+            for n in g.order:                                        # channel-sensitive ops (MONO/STEREO/DOWNMIX) skip this
+                ex._plan_node(states, states[n], sources)
+        states["track:t1"].artifact = executor.Artifact(Path(sources["a"]["path"]), 6.0, 1, 48000, "pcm_s16le", 1, "0" * 64)
+        tool, argv = ex._argv(states["op:x"], states, sources, workspace / "o.wav")[0]
+        return tool, argv
+
+    audio_ops = {
+        "GAIN": {"gain_db": -3}, "FADE_IN": {"duration": 0.5}, "FADE_OUT": {"duration": 0.5},
+        "MONO": {}, "STEREO": {}, "DOWNMIX": {}, "NOISE_REDUCTION": {"mode": "fft", "strength_db": 20},
+        "DYNAMICS": {"limiter": {"ceiling_db": -1}},
+    }
+    for typ, base_params in audio_ops.items():
+        tool, argv = argv_for(typ, dict(base_params))                # audio_stream omitted -> default flows through as 0
+        assert tool == "audio" and argv[-2] == "-o" and argv[-4:-2] == ["--audio-stream", "0"], (typ, argv)
+        tool, argv = argv_for(typ, {**base_params, "audio_stream": 3})
+        assert argv[-4:-2] == ["--audio-stream", "3"], (typ, argv)
+
+    no_audio_stream_ops = {
+        "TRIM": {"start": 0.0, "end": 1.0}, "CUT": {"remove": [{"start": 0.0, "end": 1.0}]},
+        "SILENCE_REMOVE": {"ranges": [{"start": 0.0, "end": 1.0}]},
+        "NORMALIZE": {"target_lufs": -16, "true_peak_db": -1},
+    }
+    for typ, params in no_audio_stream_ops.items():
+        tool, argv = argv_for(typ, params, plan=typ in ("CUT", "SILENCE_REMOVE"))
+        assert "--audio-stream" not in argv, (typ, argv)
+        # ffmpeg-skill's cut.py / loudness.py have no --audio-stream flag; the schema itself refuses the field
+        # outright, so a request naming it never even reaches a tool call
+        with pytest.raises(AudioError) as ei:
+            validate_parameters(typ, {**params, "audio_stream": 1}, 1, "p")
+        assert ei.value.code == "INVALID_REQUEST"
+
+
+def test_mix_and_concat_have_no_audio_stream_parameter():
+    """MIX folds already-resolved inputs through ffmpeg-skill/audio --music (always stream 0 of the bed file); CONCAT
+    goes through join.py. Neither ffmpeg-skill tool call this adapter makes for them takes --audio-stream, so the
+    parameter is refused at validation instead of being silently ignored."""
+    for typ in ("MIX", "CONCAT"):
+        with pytest.raises(AudioError) as ei:
+            validate_parameters(typ, {"audio_stream": 1}, 2, "p")
+        assert ei.value.code == "INVALID_REQUEST"

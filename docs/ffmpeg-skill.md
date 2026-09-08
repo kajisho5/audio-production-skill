@@ -63,7 +63,6 @@ missing measurement — hence the raised floor rather than a feature-detection f
 |---|---|---|
 | CHANNEL_MAP (arbitrary mapping / pan) | only `--mono`, `--stereo`, `--downmix` | provided as MONO / STEREO / DOWNMIX; `CHANNEL_MAP` not implemented |
 | RESAMPLE (standalone) | `audio.py` has no sample-rate flag; only `loudness.py --sample-rate` and `join.py --sample-rate` | `NORMALIZE.sample_rate`, `CONCAT.sample_rate`; `RESAMPLE` not implemented; outputs may declare `expect.sample_rate` for verification |
-| audio stream selection | `--audio-stream` exists on `audio.py` (since 0.9.1) and, since 0.12.0, `overlay.py`/`graphics.py`/`color.py`/`fit.py`; `cut.py`/`loudness.py`/`join.py` deliberately exclude it (0.12.0 CHANGELOG: combining separate files is "a different problem shape") | not a gap this skill is blocked on — extraction-first via `audio.py --audio-stream N` is implementable now; not yet implemented (PLANNED, docs/STATE.md) |
 | MIX per-input pan, more than one bed per call | `--music` takes one file | pairwise fold; no pan |
 | 24-bit intermediates | `.wav` → `pcm_s16le` fixed | 16-bit PCM intermediates |
 | capability detection of core filters (`volume`, `afade`, `amix`, `pan`, `aformat`) | ffmpeg-skill doctor lists only its own table | reported `unknown`, verified per run |
@@ -71,3 +70,11 @@ missing measurement — hence the raised floor rather than a feature-detection f
 
 Each gap is a request to ffmpeg-skill (or a future second backend), not something this skill works around with its
 own ffmpeg invocation.
+
+Audio stream selection is no longer a gap: `--audio-stream` has existed on `audio.py` since 0.9.1, and 0.3.0 adds an
+`audio_stream` parameter (0-based, default 0) to `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`,
+`NOISE_REDUCTION` and `DYNAMICS` — every operation whose one input is read directly by `audio.py`. `TRIM` / `CUT` /
+`SILENCE_REMOVE` (`cut.py`), `NORMALIZE` (`loudness.py`) and `CONCAT` (`join.py`) still always use stream 0: those
+tools deliberately exclude `--audio-stream` (0.12.0 CHANGELOG: combining separate files is "a different problem
+shape"). `MIX` also always uses stream 0 of each input, for the same reason — it folds already-resolved inputs
+through `--music`, which reads stream 0 of the bed file regardless of `--audio-stream` on the main input.

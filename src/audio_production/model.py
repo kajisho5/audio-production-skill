@@ -78,9 +78,20 @@ DYNAMICS_STAGES: Dict[str, Dict[str, Dict[str, Any]]] = {
     },
 }
 
+# operations whose single input is read directly by ffmpeg-skill/audio.py (TOOL_FOR in executor.py): these take
+# audio_stream to pick which of a multi-track source's audio streams to process (ffmpeg-skill audio.py --audio-stream,
+# since 0.9.1). TRIM / CUT / SILENCE_REMOVE (cut.py), NORMALIZE (loudness.py) and CONCAT (join.py) do not get it:
+# those ffmpeg-skill tools deliberately have no --audio-stream flag (0.12.0 CHANGELOG: combining separate files is
+# "a different problem shape"); MIX does not either, for the same reason (it folds multiple already-resolved inputs
+# through --music, which only ever reads stream 0 of each bed file, not the flag's own --audio-stream semantics).
+AUDIO_STREAM_PARAM: Dict[str, Any] = {"type": _INT, "required": False, "min": 0, "default": 0,
+                                       "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; "
+                                                       "probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"}
+
 OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
     "GAIN": {"description": "Apply a fixed gain in dB", "inputs": (1, 1), "parameters": {
-        "gain_db": {"type": _NUM, "required": True, "min": -60.0, "max": 60.0, "description": "gain in dB (negative attenuates)"}}},
+        "gain_db": {"type": _NUM, "required": True, "min": -60.0, "max": 60.0, "description": "gain in dB (negative attenuates)"},
+        "audio_stream": AUDIO_STREAM_PARAM}},
     "TRIM": {"description": "Keep one source time range [start, end)", "inputs": (1, 1), "parameters": {
         "start": {"type": _NUM, "required": True, "min": 0.0, "max": MAX_DURATION, "description": "source time in seconds"},
         "end": {"type": _NUM, "required": True, "min": 0.0, "max": MAX_DURATION, "description": "source time in seconds, > start"}}},
@@ -92,9 +103,11 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
         "min_duration": {"type": _NUM, "required": False, "min": 0.0, "max": MAX_DURATION, "default": 0.0, "description": "ranges shorter than this (after margin) are not removed"},
         "threshold_db": {"type": _NUM, "required": False, "min": -120.0, "max": 0.0, "description": "threshold the caller used to find the ranges; recorded in provenance, not applied"}}},
     "FADE_IN": {"description": "Linear fade in from the start", "inputs": (1, 1), "parameters": {
-        "duration": {"type": _NUM, "required": True, "min": 0.001, "max": 3600.0, "description": "seconds"}}},
+        "duration": {"type": _NUM, "required": True, "min": 0.001, "max": 3600.0, "description": "seconds"},
+        "audio_stream": AUDIO_STREAM_PARAM}},
     "FADE_OUT": {"description": "Linear fade out to the end", "inputs": (1, 1), "parameters": {
-        "duration": {"type": _NUM, "required": True, "min": 0.001, "max": 3600.0, "description": "seconds"}}},
+        "duration": {"type": _NUM, "required": True, "min": 0.001, "max": 3600.0, "description": "seconds"},
+        "audio_stream": AUDIO_STREAM_PARAM}},
     "NORMALIZE": {"description": "Two-pass EBU R128 loudness normalisation (ffmpeg loudnorm, linear mode)", "inputs": (1, 1), "parameters": {
         "target_lufs": {"type": _NUM, "required": True, "min": -70.0, "max": -5.0, "description": "integrated loudness target in LUFS; no default, the caller / profile decides"},
         "true_peak_db": {"type": _NUM, "required": True, "min": -20.0, "max": 0.0, "description": "true-peak ceiling in dBTP; no default"},
@@ -104,16 +117,18 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
         "profile": {"type": _STR, "required": False, "max_length": 64, "description": "label of the loudness profile the caller applied; recorded in provenance only"}}},
     "MIX": {"description": "Sum 2..8 inputs; output duration follows the first input (ffmpeg-skill amix duration=first)", "inputs": (2, MAX_MIX_INPUTS), "parameters": {
         "levels": {"type": _LEVELS, "required": False, "description": "per-input {gain_db, mute}, aligned with inputs (omit: 0 dB, unmuted)"}}},
-    "MONO": {"description": "Down-mix to one channel (stereo input: 0.5*L + 0.5*R)", "inputs": (1, 1), "parameters": {}},
-    "STEREO": {"description": "Force two channels (mono is duplicated to both sides)", "inputs": (1, 1), "parameters": {}},
-    "DOWNMIX": {"description": "Down-mix 5.1 / 7.1 to stereo with standard centre / LFE / surround weights", "inputs": (1, 1), "parameters": {}},
+    "MONO": {"description": "Down-mix to one channel (stereo input: 0.5*L + 0.5*R)", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
+    "STEREO": {"description": "Force two channels (mono is duplicated to both sides)", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
+    "DOWNMIX": {"description": "Down-mix 5.1 / 7.1 to stereo with standard centre / LFE / surround weights", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
     "NOISE_REDUCTION": {"description": "FFT noise reduction (ffmpeg afftdn, adaptive noise tracking)", "inputs": (1, 1), "parameters": {
         "mode": {"type": _STR, "required": True, "enum": ["fft"], "description": "only 'fft' (afftdn) is implemented"},
-        "strength_db": {"type": _NUM, "required": True, "min": 10.0, "max": 60.0, "description": "noise floor to remove in dB"}}},
+        "strength_db": {"type": _NUM, "required": True, "min": 10.0, "max": 60.0, "description": "noise floor to remove in dB"},
+        "audio_stream": AUDIO_STREAM_PARAM}},
     "DYNAMICS": {"description": "Typed dynamics: gate -> compressor -> limiter (fixed order); at least one stage", "inputs": (1, 1), "parameters": {
         "compressor": {"type": _STAGE, "required": False, "stage": "compressor", "description": "acompressor parameters (omitted fields keep ffmpeg's defaults, recorded by ffmpeg-skill)"},
         "limiter": {"type": _STAGE, "required": False, "stage": "limiter", "description": "alimiter parameters"},
-        "gate": {"type": _STAGE, "required": False, "stage": "gate", "description": "agate parameters"}}},
+        "gate": {"type": _STAGE, "required": False, "stage": "gate", "description": "agate parameters"},
+        "audio_stream": AUDIO_STREAM_PARAM}},
     "CONCAT": {"description": "Concatenate 2..32 inputs in order (ffmpeg concat), optional equal-power crossfade", "inputs": (2, MAX_CONCAT_INPUTS), "parameters": {
         "crossfade": {"type": _NUM, "required": False, "min": 0.0, "max": 30.0, "default": 0.0, "description": "seconds of acrossfade between clips (0 = butt join)"},
         "sample_rate": {"type": _INT, "required": False, "enum": list(SAMPLE_RATES), "description": "output sample rate (omit: the first input's)"},

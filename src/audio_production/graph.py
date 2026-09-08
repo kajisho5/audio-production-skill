@@ -62,7 +62,7 @@ class OperationGraph:
                 tail = nid
             if t.gain_db:
                 nid = f"op:{t.track_id}.gain"
-                self._add(Node(nid, "GAIN", [tail], {"gain_db": t.gain_db}, implicit=True))
+                self._add(Node(nid, "GAIN", [tail], {"gain_db": t.gain_db, "audio_stream": 0}, implicit=True))
                 tail = nid
             track_tail[base] = tail
         for op in p.operations:

@@ -24,7 +24,7 @@ def err(fn, code, *args, **kw):
 # ---- request schema
 def test_minimal_request_parses():
     req = parse_request(request_doc([{"op_id": "g", "type": "GAIN", "inputs": ["track:t1"], "parameters": {"gain_db": -3}}]))
-    assert req.project.operations[0].parameters == {"gain_db": -3.0}
+    assert req.project.operations[0].parameters == {"gain_db": -3.0, "audio_stream": 0}
     assert req.options == {"reuse_intermediates": True, "timeout": None}
 
 
@@ -59,13 +59,17 @@ def test_unknown_and_unsupported_operation_types():
 
 def test_parameter_validation_per_type():
     v = validate_parameters
-    assert v("GAIN", {"gain_db": 3}, 1, "p") == {"gain_db": 3.0}
+    assert v("GAIN", {"gain_db": 3}, 1, "p") == {"gain_db": 3.0, "audio_stream": 0}
     err(v, "INVALID_REQUEST", "GAIN", {}, 1, "p")                       # required
     err(v, "INVALID_REQUEST", "GAIN", {"gain_db": 100}, 1, "p")         # range
     err(v, "INVALID_REQUEST", "GAIN", {"gain_db": "3dB"}, 1, "p")       # type (a string could carry a filter)
     err(v, "INVALID_REQUEST", "GAIN", {"gain_db": True}, 1, "p")        # bool is not a number
     err(v, "INVALID_REQUEST", "GAIN", {"gain_db": 3, "curve": "x"}, 1, "p")   # unknown
     err(v, "INVALID_REQUEST", "GAIN", {"gain_db": float("nan")}, 1, "p")
+    assert v("GAIN", {"gain_db": 3, "audio_stream": 1}, 1, "p") == {"gain_db": 3.0, "audio_stream": 1}
+    err(v, "INVALID_REQUEST", "GAIN", {"gain_db": 3, "audio_stream": -1}, 1, "p")     # negative
+    err(v, "INVALID_REQUEST", "GAIN", {"gain_db": 3, "audio_stream": 1.5}, 1, "p")    # not an integer
+    err(v, "INVALID_REQUEST", "GAIN", {"gain_db": 3, "audio_stream": "1"}, 1, "p")    # not a number at all
     assert v("TRIM", {"start": 1, "end": 2.5}, 1, "p") == {"start": 1.0, "end": 2.5}
     err(v, "INVALID_TIME_RANGE", "TRIM", {"start": 2, "end": 2}, 1, "p")
     err(v, "INVALID_REQUEST", "TRIM", {"start": -1, "end": 2}, 1, "p")
@@ -91,9 +95,10 @@ def test_parameter_validation_per_type():
     err(v, "INVALID_REQUEST", "MIX", {"levels": [{"gain_db": 0, "pan": 0.5}, {}]}, 2, "p")
     err(v, "UNSUPPORTED_OPERATION", "NOISE_REDUCTION", {"mode": "ai", "strength_db": 20}, 1, "p")
     err(v, "INVALID_REQUEST", "NOISE_REDUCTION", {"mode": "fft", "strength_db": 5}, 1, "p")
-    assert v("MONO", None, 1, "p") == {}
+    assert v("MONO", None, 1, "p") == {"audio_stream": 0}
+    assert v("MONO", {"audio_stream": 2}, 1, "p") == {"audio_stream": 2}
     dy = v("DYNAMICS", {"compressor": {"threshold_db": -18, "ratio": 3}, "limiter": {"ceiling_db": -1}}, 1, "p")
-    assert dy == {"compressor": {"threshold_db": -18.0, "ratio": 3.0}, "limiter": {"ceiling_db": -1.0}}
+    assert dy == {"compressor": {"threshold_db": -18.0, "ratio": 3.0}, "limiter": {"ceiling_db": -1.0}, "audio_stream": 0}
     err(v, "INVALID_REQUEST", "DYNAMICS", {}, 1, "p")                                         # at least one stage
     err(v, "INVALID_REQUEST", "DYNAMICS", {"compressor": {"ratio": 0.5}}, 1, "p")             # range
     err(v, "INVALID_REQUEST", "DYNAMICS", {"gate": {"threshold_db": -20, "hold_ms": 5}}, 1, "p")   # unknown field
@@ -212,6 +217,36 @@ def test_identities_are_deterministic_and_parameter_sensitive():
     assert OperationGraph(parse_request(request_doc(ops2)).project).identities({"a": "f" * 64}, {"ffmpeg-skill": "0.9.0"})["op:g"] != ids1["op:g"]   # parameters
     ops3 = [{"op_id": "other", "type": "GAIN", "inputs": ["track:t1"], "parameters": {"gain_db": -3}}]
     assert OperationGraph(parse_request(request_doc(ops3)).project).identities({"a": "f" * 64}, {"ffmpeg-skill": "0.9.0"})["op:other"] == ids1["op:g"]  # op_id is a label, not identity
+
+
+def test_identity_is_sensitive_to_audio_stream():
+    """Two operations that differ only in audio_stream must not collide in the intermediate cache."""
+    base = {"a": "f" * 64}
+    versions = {"ffmpeg-skill": "0.12.0"}
+
+    def ids_for(typ, params):
+        ops = [{"op_id": "x", "type": typ, "inputs": ["track:t1"], "parameters": params}]
+        return OperationGraph(parse_request(request_doc(ops)).project).identities(base, versions)["op:x"]
+
+    for typ, params in (
+        ("GAIN", {"gain_db": -3}),
+        ("FADE_IN", {"duration": 0.5}),
+        ("FADE_OUT", {"duration": 0.5}),
+        ("MONO", {}),
+        ("NOISE_REDUCTION", {"mode": "fft", "strength_db": 20}),
+        ("DYNAMICS", {"limiter": {"ceiling_db": -1}}),
+    ):
+        default_id = ids_for(typ, params)                                          # audio_stream omitted -> default 0
+        explicit_zero_id = ids_for(typ, {**params, "audio_stream": 0})
+        stream_one_id = ids_for(typ, {**params, "audio_stream": 1})
+        assert default_id == explicit_zero_id                                      # the default and an explicit 0 are the same identity
+        assert stream_one_id != default_id, (typ, "audio_stream must change the cache identity")
+    # STEREO / DOWNMIX need a matching channel input to plan (not exercised here), but identity is computed
+    # from parameters alone and does not depend on planning, so they follow the same rule via validate_parameters:
+    from audio_production.model import validate_parameters
+    for typ in ("STEREO", "DOWNMIX"):
+        assert validate_parameters(typ, {}, 1, "p")["audio_stream"] == 0
+        assert validate_parameters(typ, {"audio_stream": 3}, 1, "p")["audio_stream"] == 3
 
 
 def test_canonical_json_is_stable():
