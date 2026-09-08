@@ -64,8 +64,9 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
    sidecars; CONCAT is one `ffmpeg-skill/join` call; DYNAMICS one `ffmpeg-skill/audio` call with typed flags.
    Sidecars are always removed; on failure the intermediate is removed too.
 5. Validate every intermediate: exists, size > 0, readable, probed audio stream, codec `pcm_s16le`, duration within
-   0.1 s of the expected timeline, channel count as derived from the graph, requested sample rate. NORMALIZE outputs
-   are re-measured with `ffmpeg-skill/loudness --measure-only`; with `tolerance_lufs` set, an off-target result is a
+   0.1 s of the expected timeline, channel count as derived from the graph, requested sample rate. NORMALIZE's
+   post-normalization loudness comes from the `result` field of that same `ffmpeg-skill/loudness` call's `--json`
+   response (ffmpeg-skill >= 0.12.0), not a second process; with `tolerance_lufs` set, an off-target result is a
    `VALIDATION_ERROR`.
 6. Export every output with `ffmpeg-skill/audio` to the requested format and validate it against `expect`.
 7. Return one response document: `ok`, `status`, `plan`, `results`, `outputs` (with provenance), `tool_runs`,
@@ -78,7 +79,8 @@ The only module that starts a process. `locate()` finds the checkout; `info()` r
 (`_contract.py --json --static`) and checks `contract_version == 1.0`, the version window and that every flag this
 skill emits exists in the tool's `input_schema`; `run_tool()` runs `[sys.executable, scripts/<tool>.py, *argv, --json]`
 in its own process group with a minimal environment and a timeout, and parses the `{"status": "completed"|"failed"}`
-document; `probe()` and `measure_loudness()` wrap the two read-only tools.
+document; `probe()` wraps the one read-only tool (loudness verification is read from the NORMALIZE call's own
+response, not a separate call).
 
 ## Response envelope
 
@@ -89,8 +91,8 @@ process exit code is `0` iff `ok`, else `errors.EXIT_CODES[code]`.
 
 ## Versioning
 
-- Package / Skill version: `audio_production.VERSION` (`0.1.0`), carried in every document and in every intermediate manifest.
+- Package / Skill version: `audio_production.VERSION` (`0.2.0`), carried in every document and in every intermediate manifest.
 - Document schemas: `audio-production/{contract,request,response,doctor}@1`, versioned independently; within `@1`
   changes are additive only. Renaming an operation type, a parameter, or changing how an operation is realised bumps
   the minor package version (and therefore every operation identity, by design).
-- ffmpeg-skill compatibility window: contract `1.0`, version `[0.9.1, 1.0.0)`; checked at every run and by `doctor`.
+- ffmpeg-skill compatibility window: contract `1.0`, version `[0.12.0, 1.0.0)`; checked at every run and by `doctor`.

@@ -6,7 +6,7 @@ Read this first; do not rely on conversation history. Current state and next tas
 
 A deterministic **audio production execution Skill** of the kajisho5 video production ecosystem (README "What it is,
 and what it is not"). It executes a typed operation graph (GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN/OUT, NORMALIZE,
-MIX, CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS) through **ffmpeg-skill ≥ 0.9.1**'s public contract
+MIX, CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS) through **ffmpeg-skill ≥ 0.12.0**'s public contract
 and reports validated artifacts with provenance. It is not an agent, not a measurement skill, not ffmpeg-skill.
 
 ## Boundaries that must hold
