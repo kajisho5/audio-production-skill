@@ -39,7 +39,7 @@ jobs:
         id: drafter
         continue-on-error: true   # bootstrap (no prior tag) can leave this with nothing to resolve;
                                   # compute_version.sh only reads its output when it actually needs to
-        uses: release-drafter/release-drafter@v6
+        uses: release-drafter/release-drafter@v7
         with:
           dry-run: true
           disable-autolabeler: true
