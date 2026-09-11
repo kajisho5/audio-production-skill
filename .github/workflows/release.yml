@@ -25,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0   # full history + tags: compute_version.sh and render_changelog.sh need both
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
