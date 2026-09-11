@@ -59,11 +59,12 @@ autolabeler:
     title:
       - '/^feat(\(.+\))?:/i'
       - '/^(add|implement|introduce)\b/i'
-  - label: 'major'
-    title:
-      - '/^(breaking|major)\b/i'
-    body:
-      - '/BREAKING CHANGE/'
+
+# `major`/`breaking` is deliberately NOT autolabeled from title or body text. A PR whose title happens
+# to start with "major"/"breaking", or whose description merely mentions the words "BREAKING CHANGE"
+# (e.g. describing a bug), must not silently trigger a major version bump. A human applies the
+# `major`/`breaking` label by hand when a change is actually breaking; only that label -- never text
+# pattern-matching -- feeds `version-resolver`'s major bump.
 
 template: |
   ## What's Changed
