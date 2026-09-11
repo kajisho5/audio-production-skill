@@ -50,3 +50,9 @@ audio-production contract --check tests/contract/contract.json --json
   Windows), which behave differently for AAC trim boundaries (docs/ffmpeg-skill.md).
 - Commit messages and PR bodies follow the existing ones; PRs are squash-merged; the branch cannot be deleted
   through the git proxy (delete it in the GitHub UI).
+- `.github/workflows/release.yml` (ADR-14) tags and releases automatically on push to `main`, resolving the next
+  version from PR labels unless `pyproject.toml`'s current version is already ahead of the latest tag (a manual
+  bump per the rule above is always respected, never overwritten). Label a PR `major`/`breaking`,
+  `minor`/`feature`/`enhancement`, or `patch`/`fix`/`bug`/`chore`/`documentation` (`.github/workflows/autolabel.yml`
+  usually does this from the title/branch/files automatically); unlabeled defaults to patch. Don't hand-edit
+  `CHANGELOG.md` — the release workflow generates it from `git log` every run.

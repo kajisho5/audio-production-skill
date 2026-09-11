@@ -18,6 +18,12 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 - Consumers: video-production-agent (ADR-030 there) pins this contract at `tools/audio_production/contract_0.1.0.json`
   and drives 9 of the 14 operations from its planner; its real-media `AudioProductionRealTests` (5) pass against
   main 2f31d4d (verified 2026-09-05).
+- GitHub automation (ADR-14): `.github/workflows/release.yml` (single job on push to `main`: resolve the next
+  version from PR labels via `release-drafter` dry run, bump `pyproject.toml` + `__init__.py` + the pinned contract
+  snapshot only when the auto-bump condition holds, render `CHANGELOG.md` from `git log`, tag, GitHub Release, PyPI
+  publish only if `PYPI_API_TOKEN` is set), `.github/workflows/autolabel.yml` (`release-drafter` autolabeler on
+  `pull_request_target`), `.github/workflows/codeql.yml` (Python, PR + push + weekly), `.github/dependabot.yml`
+  (github-actions + pip), `.github/pull_request_template.md`, `SECURITY.md`.
 
 ## EXPERIMENTAL
 
@@ -27,8 +33,14 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 
 ## PLANNED / candidates (highest value first)
 
-1. A release tag / GitHub release for 0.1.0 once the human decides on distribution (PyPI is not set up; nothing is
-   published). Do not claim availability.
+1. The release workflow (above) will cut the first tag/Release the next time it runs on a qualifying push, at
+   whatever `pyproject.toml` version is current then -- it does not need a human to trigger it, only for PyPI
+   publish to stay skipped until a human adds `PYPI_API_TOKEN` as a repository secret (see SECURITY-conscious
+   default in release.yml: no token, no publish, tag/Release still happen). Two things depend on repository
+   settings only a human can grant: `contents: write` for the default `GITHUB_TOKEN` (Settings → Actions → General
+   → Workflow permissions) and, if `main` has branch protection, an allowance for GitHub Actions to push directly
+   to it (or the push step in release.yml needs converting to open a PR instead). Do not claim PyPI availability
+   before a human confirms a publish actually ran.
 2. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
 
 ## Known limitations (see README "Current limitations")
@@ -46,6 +58,14 @@ reported `unknown` by doctor; no eviction.
 - AI-video-production-OS: only `provides` (EXPERIMENTAL); no other OS-specific concept in this repository.
 
 ## Change log of state
+
+- 2026-09-11 (#10): added GitHub automation infrastructure -- see the CURRENT bullet above for the file list.
+  `.github/scripts/{compute_version,render_changelog,bump_version_files}.sh` back the release workflow and were
+  each verified against an isolated git fixture (not this repo) before being wired in, including a deliberately
+  hostile commit message (`$(...)`, backticks) to confirm `git log`-sourced text never reaches a shell as code;
+  that testing caught and fixed two real bugs (a non-`MULTILINE` regex silently matching nothing, and
+  `re.subn(count=1)` making the "ambiguous match" check always read back 1 no matter how many matches existed).
+  ADR-14.
 
 - 2026-09-05: #1 skill implemented (0.1.0), #2 sponsorship links, #3 `provides`, #4 contract --check + pinned
   snapshot + CLAUDE.md + this file, #5 `run --cleanup intermediates` (operator-level; the request block stays pinned).
