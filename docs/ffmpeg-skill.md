@@ -1,8 +1,9 @@
 # ffmpeg-skill relationship
 
 audio-production-skill is a client of ffmpeg-skill's **public contract** (`ffmpeg-skill contract --json`,
-`contract_version 1.0`, verified against ffmpeg-skill 0.9.1 at commit `2abd89c` and again against 0.12.2; versions
-below 0.12.0 are refused, see below). It never calls `ffmpeg` or `ffprobe` itself.
+`contract_version 1.0`, verified against ffmpeg-skill 0.9.1 at commit `2abd89c`, 0.12.2 at `336e0c4`, and 2.10.3).
+There is no version window: compatibility is detected from the located checkout's contract (see below, ADR-15).
+It never calls `ffmpeg` or `ffprobe` itself.
 
 ## Tools and flags used
 
@@ -16,22 +17,35 @@ below 0.12.0 are refused, see below). It never calls `ffmpeg` or `ffprobe` itsel
 
 `doctor` checks that the located ffmpeg-skill declares these tools with `audio_only: true` and that every flag exists
 in the tool's generated `input_schema`; a mismatch is a `fail` and `run` refuses with `TOOL_ERROR`
-(`ffmpeg_skill_incompatible`).
+(`ffmpeg_skill_incompatible`). That is the whole compatibility check — the version string is reported, never
+compared, and a `contract_version` other than `1.x` is a warning.
 
-## Why 0.12.0 is the minimum
+Optional flags (`adapter.OPTIONAL_FLAGS_USED`), emitted only when the located contract declares them; `doctor`
+reports each under `checks.ffmpeg_skill.optional_flags`:
+
+| flag | declared by | used for | without it |
+|---|---|---|---|
+| `audio --overwrite` | ffmpeg-skill >= 1.10 (which refuses to replace an existing output without it) | export to an existing path when the request set `overwrite: true` | not passed; older releases replace the file anyway and reject the flag |
+| `loudness --measure-only` | every release this skill can run | NORMALIZE verification when the call's `--json` has no `result` (before 0.12.0); the measurement is read from the document's top level, `result` or `measured` (2.x) | `TOOL_ERROR` `loudness_result_missing` if `result` is also absent |
+
+ffmpeg-skill 2.0's other breaking changes do not reach this skill: it emits no `--crf` (renamed `--quality`), imports
+nothing from `scripts/_common` (now a package) and does not read probe's `hdr` (meaning changed; `bt2020_or_hdr`
+keeps the old one). Result top-level keys are unchanged.
+
+## Why there is no minimum version (ADR-15; previously 0.12.0, ADR-13)
 
 Measured on 0.9.0: `cut --accurate` and the keyframe fallback re-encoded audio with AAC even into a `.wav`
 container, `cut -c copy` copied compressed packets into `.wav`, `audio.py` always mapped the video stream so a video
 container could not yield an audio-only output, `join` required video, there were no typed dynamics, and the doctor
-reported every filter missing on FFmpeg ≥ 8. 0.9.1 fixed all of these (its CHANGELOG), and the adapter's minimum was
-0.9.1 for a while on that basis. 0.12.0 added the post-normalization measurement (`result`) to `loudness.py`'s
-`--json` response for a NORMALIZE call (previously only available via a second `--measure-only` process); this
-skill's `_verify_loudness` now reads it directly (ADR-13, docs/decisions.md) instead of re-running `loudness.py`,
-so the adapter's version window is `[0.12.0, 1.0.0)`. A checkout in `[0.9.1, 0.12.0)` still runs the two-pass
-NORMALIZE fine but its `loudness.py --json` has no `result` field, which this skill would otherwise misread as a
-missing measurement — hence the raised floor rather than a feature-detection fallback.
+reported every filter missing on FFmpeg ≥ 8. 0.9.1 fixed all of these (its CHANGELOG). 0.9.0 is still refused, but
+by capability detection: it lacks `--audio-stream` and the `--gate/--compress/--limit` flags in `FLAGS_USED`.
+0.12.0 added the post-normalization measurement (`result`) to `loudness.py`'s `--json` response, which
+`_verify_loudness` reads (ADR-13); for an older release whose response has no `result` the output is measured with
+`--measure-only` instead, so `[0.9.1, 0.12.0)` no longer needs a floor. There is no upper bound: 1.x and 2.x are
+verified to keep every tool and flag this skill emits, and CI runs against ffmpeg-skill `main` so the next release
+is checked as soon as it lands.
 
-## Observed behaviour this skill relies on (measured, ffmpeg-skill 0.9.1 / ffmpeg 6.1.1, and 0.12.2)
+## Observed behaviour this skill relies on (measured, ffmpeg-skill 0.9.1 / ffmpeg 6.1.1, 0.12.2, and 2.10.3)
 
 - `audio.py` without processing flags re-encodes the first audio stream to the codec of the output extension
   (`.wav` → `pcm_s16le`, `.flac`, `.mp3` → libmp3lame, `.m4a`/`.aac` → aac, `.ogg` → libvorbis, `.opus` → libopus):
@@ -54,6 +68,9 @@ missing measurement — hence the raised floor rather than a feature-detection f
 - `loudness.py` refuses silent inputs (`input audio is silent`) → `TOOL_ERROR`; a normal (non-`--measure-only`)
   call's `--json` response includes a `result` field (`{input_i, input_tp, input_lra, input_thresh, target_offset,
   silent}`, ffmpeg-skill >= 0.12.0) with the post-normalization measurement, which `_verify_loudness` reads directly.
+  `--measure-only --json` prints the same keys at the top level (0.x) or under `measured` (2.x).
+- `audio.py -o <existing file>`: replaced silently before 1.10; refused (`kind: input`) from 1.10 / 2.0 unless
+  `--overwrite` is passed, a flag the older releases reject.
 - Failure document: `{"status": "failed", "error": {"kind": "input|ffmpeg|missing_tool", "message"}}` with a non-zero
   exit; parsed into `TOOL_ERROR` with `details.error_kind`.
 
