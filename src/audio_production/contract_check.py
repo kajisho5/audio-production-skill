@@ -17,7 +17,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 from . import SKILL_ID, VERSION
-from .adapter import FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
+from .adapter import FLAGS_USED, OPTIONAL_FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .contract import CAPABILITY_IDS, CONTRACT_SCHEMA_ID, skill_contract
 from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
 from .executor import TOOL_FOR
@@ -84,8 +84,9 @@ def verify_implementation(contract: Optional[Dict[str, Any]] = None, root: Optio
         if ex.get(k) is not False:
             p.append(f"execution.{k} must be false")
     fs = c.get("ffmpeg_skill") or {}
-    if fs.get("contract_version") != SUPPORTED_CONTRACT_VERSION or fs.get("tools_used") != list(TOOLS_USED) or fs.get("flags_used") != {k: list(v) for k, v in FLAGS_USED.items()}:
-        p.append("contract.ffmpeg_skill differs from adapter.TOOLS_USED / FLAGS_USED")
+    if fs.get("contract_version") != SUPPORTED_CONTRACT_VERSION or fs.get("tools_used") != list(TOOLS_USED) or fs.get("flags_used") != {k: list(v) for k, v in FLAGS_USED.items()} \
+            or fs.get("optional_flags_used") != {k: list(v) for k, v in OPTIONAL_FLAGS_USED.items()} or "version_window" in fs:
+        p.append("contract.ffmpeg_skill differs from adapter.TOOLS_USED / FLAGS_USED / OPTIONAL_FLAGS_USED")
     p += verify_docs(root)
     return p
 

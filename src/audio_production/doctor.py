@@ -9,7 +9,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from . import DOCTOR_SCHEMA_VERSION, SKILL_ID, VERSION
-from .adapter import FfmpegSkill
+from .adapter import TOOLS_USED, FfmpegSkill
 from .errors import AudioError
 from .executor import TOOL_FOR
 from .model import CHANNEL_LAYOUTS, OPERATION_TYPES, OUTPUT_FORMATS, SAMPLE_RATES, UNSUPPORTED_OPERATIONS
@@ -77,8 +77,9 @@ def doctor_report(ffmpeg_skill_dir: Optional[str] = None, workspace: Optional[st
         skill = FfmpegSkill.locate(ffmpeg_skill_dir)
         info = skill.info()
         checks["ffmpeg_skill"] = {"status": "ok" if info.supported else "fail", "directory": str(info.directory), "version": info.version,
-                                  "contract_version": info.contract_version, "tools_used": list(sorted(t for t in info.tools if t in ("probe", "audio", "cut", "loudness"))),
-                                  "problems": info.problems}
+                                  "contract_version": info.contract_version, "tools_used": list(sorted(t for t in info.tools if t in TOOLS_USED)),
+                                  "compatibility": "capability detection: required tools and flags read from this checkout's contract; no version window",
+                                  "optional_flags": info.optional_flags(), "problems": info.problems, "warnings": info.warnings}
         problems += ["ffmpeg-skill: " + p for p in info.problems]
         ffdoc = ffmpeg_skill_doctor(skill)
         checks["ffmpeg"] = {"status": "ok" if ffdoc.get("ffmpeg") else "missing", "version": ffdoc.get("ffmpeg"), "detected_by": "ffmpeg-skill doctor"}
@@ -92,7 +93,7 @@ def doctor_report(ffmpeg_skill_dir: Optional[str] = None, workspace: Optional[st
         problems.append("ffmpeg-skill: " + e.message)
     caps = capability_status(info, ffdoc)
     checks["capabilities"] = caps
-    warnings: List[str] = []
+    warnings: List[str] = ["ffmpeg-skill: " + w for w in (info.warnings if info is not None else [])]
     detection = ffdoc.get("detection") or {}
     if detection:
         checks["ffmpeg_skill_detection"] = detection

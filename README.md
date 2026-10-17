@@ -46,10 +46,11 @@ audio-production plan - --json             # dry run: graph, tool selection, exp
 audio-production run - --json              # execute (stdin: request document; stdout: exactly one response document)
 ```
 
-Requirements: Python 3.9+, standard library only; an **ffmpeg-skill** checkout (0.12.0 ≤ version < 1.0, contract 1.0;
-versions below 0.12.0 are refused — 0.9.0's audio cuts could write AAC packets into `.wav`, and versions before
-0.12.0 lack the `result` field this skill reads for NORMALIZE verification) and FFmpeg (`ffmpeg` + `ffprobe`) on
-PATH for ffmpeg-skill. Install: `pip install -e .`
+Requirements: Python 3.9+, standard library only; an **ffmpeg-skill** checkout (any version: there is no version
+window — compatibility is detected from the checkout's own contract, which must declare `probe`, `audio`, `cut`,
+`loudness` and `join` with every flag this skill emits; optional flags such as `--overwrite` are used only where
+declared, see docs/ffmpeg-skill.md; CI runs against both commit `336e0c4` (0.12.2) and ffmpeg-skill `main`) and
+FFmpeg (`ffmpeg` + `ffprobe`) on PATH for ffmpeg-skill. Install: `pip install -e .`
 
 ## What it is, and what it is not
 
@@ -335,9 +336,11 @@ Windows and macOS with a real FFmpeg and a fresh ffmpeg-skill clone: [.github/wo
 `source → TRIM → GAIN → FADE_OUT → NORMALIZE → output validation` on a generated 6 s / 48 kHz PCM fixture through the
 real ffmpeg-skill and FFmpeg and asserts duration, channels, sample rate, hashes and the re-measured loudness;
 `test_mix_two_sources_then_normalize` runs `A → GAIN, B (range, gain) → MIX → NORMALIZE`; `test_concat`, `test_dynamics`
-and the video-container cases cover the 0.12.0 capabilities this skill requires. Fixtures are synthesised with ffmpeg
-at test time (the tests may call ffmpeg; the skill never does). Measured on ffmpeg 6.1.1 / ffmpeg-skill 0.9.1, and
-re-verified against ffmpeg-skill 0.12.2, which is what CI's pinned commit `336e0c4` now runs.
+and the video-container cases cover the ffmpeg-skill capabilities this skill requires;
+`tests/test_ffmpeg_skill_compat.py` pins the capability detection (any version, optional `--overwrite` /
+`--measure-only`). Fixtures are synthesised with ffmpeg at test time (the tests may call ffmpeg; the skill never
+does). Measured on ffmpeg 6.1.1 / ffmpeg-skill 0.9.1, re-verified against ffmpeg-skill 0.12.2 (commit `336e0c4`) and
+2.10.3; CI runs every cell against both `336e0c4` and ffmpeg-skill `main`.
 
 ## Relationship to the other skills
 

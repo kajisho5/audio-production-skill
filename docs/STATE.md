@@ -5,16 +5,19 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 
 ## CURRENT (main)
 
-- Skill `audio-production` 0.3.0, contract `audio-production/contract@1`, one tool `audio-production/run`, 14
+- Skill `audio-production` 0.4.0, contract `audio-production/contract@1`, one tool `audio-production/run`, 14
   operation types; sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
   `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS` take `audio_stream`
   (0-based, default 0) to pick which audio stream of their one input `ffmpeg-skill/audio` processes.
-- Execution through ffmpeg-skill 0.12.0 ≤ v < 1.0 (`probe`, `audio`, `cut --accurate`, `loudness`, `join`); NORMALIZE
-  verification reads the `result` field of the NORMALIZE call's own `--json` response (ADR-13), no second process.
+- Execution through any ffmpeg-skill whose contract declares the required tools and flags — no version window
+  (ADR-15) — (`probe`, `audio`, `cut --accurate`, `loudness`, `join`); NORMALIZE verification reads the `result` field
+  of the NORMALIZE call's own `--json` response (ADR-13), falling back to `--measure-only` only on a release without
+  it; `--overwrite` is passed on export only when the installed ffmpeg-skill declares it.
 - CLI `skill | contract [--check [FILE|-]]`, `doctor`, `validate`, `plan`, `run` (`--cleanup keep|intermediates`) with
   `--json`; one JSON document on stdout; 15 error codes with stable exit codes.
 - Tests: unit / security / contract (pinned `tests/contract/contract.json`) / integration with real audio; CI on
-  Linux 3.9 + 3.11, Windows, macOS with real FFmpeg and ffmpeg-skill pinned to commit `336e0c4` (0.12.2).
+  Linux 3.9 + 3.11, Windows, macOS with real FFmpeg, every cell against both ffmpeg-skill commit `336e0c4` (0.12.2)
+  and ffmpeg-skill `main` (also daily on a schedule).
 - Consumers: video-production-agent (ADR-030 there) pins this contract at `tools/audio_production/contract_0.1.0.json`
   and drives 9 of the 14 operations from its planner; its real-media `AudioProductionRealTests` (5) pass against
   main 2f31d4d (verified 2026-09-05).
@@ -53,7 +56,7 @@ reported `unknown` by doctor; no eviction.
 
 ## OS integration status
 
-- ffmpeg-skill: engine, contract 1.0, minimum 0.12.0 (ADR-9, ADR-13). media-analysis-skill: no code dependency (its
+- ffmpeg-skill: engine, contract 1.0, capability detection instead of a version window (ADR-9, ADR-15). media-analysis-skill: no code dependency (its
   observations are the intended inputs, chosen by the agent). video-production-agent: integrated (see CURRENT).
 - AI-video-production-OS: only `provides` (EXPERIMENTAL); no other OS-specific concept in this repository.
 
@@ -87,3 +90,11 @@ reported `unknown` by doctor; no eviction.
   and `tests/contract/contract.json` regenerated — video-production-agent must re-pin. Closed the audio-stream-
   selection PLANNED item; corrected README "Future extensions" / docs/ffmpeg-skill.md's compatibility-gap table,
   which had framed it as blocked on a future ffmpeg-skill capability that has existed since 0.9.1.
+- 2026-10-17: ffmpeg-skill compatibility by capability detection (ADR-15). `SUPPORTED_MIN` / `SUPPORTED_MAX_EXCLUSIVE`
+  removed — the `[0.12.0, 1.0.0)` window refused ffmpeg-skill 1.x / 2.x outright although every tool and flag this
+  skill emits is still declared there. Added `OPTIONAL_FLAGS_USED` (`audio.overwrite`, emitted on export only when
+  declared: ffmpeg-skill >= 1.10 refuses to replace an existing output without it; `loudness.measure_only`, the
+  NORMALIZE verification fallback for a release with no `result`). Contract block `ffmpeg_skill` changed
+  (`version_window` → `compatibility` + `optional_flags_used`), so `VERSION` bumped to `0.4.0` and
+  `tests/contract/contract.json` regenerated — video-production-agent must re-pin. CI runs every cell against
+  `336e0c4` (0.12.2) and ffmpeg-skill `main`, plus a daily schedule.

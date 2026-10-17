@@ -55,6 +55,8 @@
   unsafe/insufficient, not kept as a permanent workaround). `adapter.measure_loudness` and the `measure_only` flag
   in `FLAGS_USED` are removed as dead code. Breaking for the pinned `ffmpeg_skill` contract block; `VERSION` bumps
   to `0.2.0` and `tests/contract/contract.json` is regenerated (video-production-agent must re-pin).
+  *Superseded in part by ADR-15:* the `SUPPORTED_MIN` floor is gone; a release without `result` is verified with
+  `--measure-only` when its contract declares that flag, and refused with `TOOL_ERROR` only when it declares neither.
 - **ADR-14 GitHub release automation is one workflow, triggered on push to `main`, not push+tag split.**
   A commit or tag pushed by a workflow using the default `GITHUB_TOKEN` does not itself trigger another
   `on: push`/`on: push: tags` workflow (GitHub's documented anti-recursion rule) — splitting version-decision and
@@ -79,3 +81,21 @@
   check never triggerable. Needs two things only a human can grant before it can push to `main`: `contents: write`
   for the default token (Settings → Actions → General → Workflow permissions) and, if `main` has branch
   protection, an allowance for Actions to push to it directly (see docs/STATE.md PLANNED).
+- **ADR-15 ffmpeg-skill compatibility is capability detection; there is no version window.** The adapter refused
+  every ffmpeg-skill outside `[0.12.0, 1.0.0)`, so ffmpeg-skill 1.x / 2.x ("ffmpeg-skill 2.10.3 is outside the
+  supported window") was rejected even though each tool and flag this skill emits is still declared there, and
+  ffmpeg-skill keeps `contract_version` at `1.0` across 0.x, 1.x and 2.x, so the number says nothing about what
+  changed. Measured differences between 0.12.2 and 2.10.3 that touch this skill: (1) from 1.10 an existing output
+  is refused without `--overwrite`, a flag older releases reject — detected from `audio`'s `input_schema` and
+  emitted on export only when the request set `overwrite: true` (intermediates are deleted before each tool call,
+  so they never need it); (2) a `--measure-only` document moved its numbers under `measured` — read from the top
+  level, `result` or `measured`. 2.0's other breaks (`--crf` → `--quality`, `scripts/_common/` package, probe's `hdr`
+  meaning) do not touch this skill: it emits no `--crf`/`--quality`, imports nothing from ffmpeg-skill and reads no
+  `hdr`. Rules: required capabilities go in `FLAGS_USED` and are checked flag by flag (that check is what refuses
+  0.9.0, which lacks `--audio-stream` and the dynamics flags — no version comparison is needed for it); a capability
+  whose absence has a working older behaviour goes in `OPTIONAL_FLAGS_USED` and is used through `takes_flag()`;
+  `contract_version` other than `1.x` is a doctor warning, not a refusal; no upper bound, ever. `doctor` reports the
+  detected optional flags. CI runs every cell against commit `336e0c4` (0.12.2) and ffmpeg-skill `main`, daily too,
+  so a new ffmpeg-skill release is exercised without a commit here. Pinned by `tests/test_ffmpeg_skill_compat.py`.
+  Breaking for the pinned `ffmpeg_skill` contract block (`version_window` removed, `compatibility` and
+  `optional_flags_used` added): `VERSION` bumps to `0.4.0`, video-production-agent must re-pin.
