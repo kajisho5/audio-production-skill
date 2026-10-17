@@ -1,4 +1,33 @@
-# audio-production-skill
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/app-icon-dark.png">
+    <img src="brand/app-icon.png" width="128" alt="audio-production-skill app icon">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/logo/audio-production-skill-wordmark-white.svg">
+    <img src="brand/logo/audio-production-skill-wordmark-black.svg" height="48" alt="audio-production-skill">
+  </picture>
+</p>
+
+<p align="center"><b>Deterministic audio production / processing Skill for the AI Video Production Ecosystem</b><br>
+Executes a typed operation graph through ffmpeg-skill, with validated artifacts and provenance out.<br>
+NOT an AI agent: no LLM, no prompt, no reasoning, no decision.</p>
+
+<p align="center">
+  <a href="#cli"><b>CLI</b></a> ·
+  <a href="#supported-operations">Supported operations</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="docs/contract.md">Contract</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/kajisho5/audio-production-skill/actions/workflows/tests.yml"><img src="https://github.com/kajisho5/audio-production-skill/actions/workflows/tests.yml/badge.svg" alt="tests"></a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT License"></a>
+</p>
 
 Deterministic audio **production / processing** Skill for the AI Video Production Ecosystem: gain, sample-accurate
 trim / cut, silence removal (explicit ranges), fades, EBU R128 loudness normalisation, mix, concat, mono / stereo /
