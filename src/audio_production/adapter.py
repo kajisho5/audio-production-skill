@@ -2,7 +2,9 @@
 
 - Locates an ffmpeg-skill checkout (explicit dir > AUDIO_PRODUCTION_FFMPEG_SKILL_DIR > VIDEO_AGENT_FFMPEG_SKILL_DIR >
   ~/.claude/skills/ffmpeg-skill > ./vendor/ffmpeg-skill > ../ffmpeg-skill) and reads its contract (`scripts/_contract.py
-  --json --static`) to check contract_version and the flags this skill relies on.
+  --json --static`). Compatibility is decided by capability detection, never by the version number: every tool in
+  TOOLS_USED must be declared `audio_only` and every flag in FLAGS_USED must exist in its input_schema; the flags in
+  OPTIONAL_FLAGS_USED are used only when the installed version declares them (ADR-15).
 - Runs one named tool as  [sys.executable, <dir>/scripts/<tool>.py, <typed argv...>, --json]  with a minimal
   environment, in its own process group, with a timeout; never a shell, never a request-supplied string as a flag.
 - Every argv value is produced here from validated numbers / resolved paths; paths are absolute so they can never be
@@ -16,7 +18,8 @@ Which ffmpeg-skill tools are used, and for what (docs/ffmpeg-skill.md):
             (--music, always stream 0 of each already-resolved input), format conversion / extraction
   cut       TRIM (--start/--end), CUT / SILENCE_REMOVE (--segments = kept ranges), always --accurate (sample precision)
   loudness  NORMALIZE (-I/--tp/--lra/--sample-rate); verification reads the `result` field of that same call's
-            --json response (ffmpeg-skill >= 0.12.0), no separate --measure-only process
+            --json response (ffmpeg-skill >= 0.12.0); only when a release has no `result` is the output measured by
+            a second --measure-only call (detected from the contract, ADR-15)
   join      CONCAT (--transition none | fade --duration, --sample-rate, --channels)
 
 TRIM/CUT/SILENCE_REMOVE (cut.py), NORMALIZE (loudness.py) and CONCAT (join.py) have no --audio-stream flag in
@@ -26,7 +29,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -37,10 +39,9 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .errors import AudioError
 
+# The ffmpeg-skill contract_version this adapter was written against. Reported, not gated on: ffmpeg-skill kept
+# "1.0" across 0.x, 1.x and 2.x, and what this skill actually needs is checked flag by flag below (ADR-15).
 SUPPORTED_CONTRACT_VERSION = "1.0"
-SUPPORTED_MIN = (0, 12, 0)    # loudness.py's --json response includes the post-normalization `result` (ADR-13);
-                              # 0.9.0 wrote AAC packets into .wav on audio cuts and could not extract audio from video
-SUPPORTED_MAX_EXCLUSIVE = (1, 0, 0)
 ENV_DIR_KEYS = ("AUDIO_PRODUCTION_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
 TOOLS_USED = ("probe", "audio", "cut", "loudness", "join")
 # flags of the ffmpeg-skill input_schema this adapter emits; checked against the live contract in doctor
@@ -55,9 +56,18 @@ FLAGS_USED: Dict[str, Tuple[str, ...]] = {
     "loudness": ("input", "output", "lufs", "tp", "lra", "sample_rate", "json"),
     "join": ("inputs", "output", "transition", "duration", "sample_rate", "channels", "json"),
 }
+# flags emitted only when the located ffmpeg-skill declares them (capability detection, ADR-15):
+#   audio.overwrite        ffmpeg-skill >= 1.10 refuses to replace an existing output without --overwrite; older
+#                          releases always replaced it and reject the unknown flag. Passed on export when the
+#                          request set `overwrite: true`.
+#   loudness.measure_only  fallback verification for releases whose NORMALIZE --json has no `result` field
+#                          (before 0.12.0): the output is measured with a second, --measure-only call.
+OPTIONAL_FLAGS_USED: Dict[str, Tuple[str, ...]] = {
+    "audio": ("overwrite",),
+    "loudness": ("measure_only",),
+}
 _ENV_KEEP = ("PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TERM",
              "SYSTEMROOT", "SYSTEMDRIVE", "PATHEXT", "COMSPEC", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA")
-_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 
 
 def _clean_env() -> Dict[str, str]:
@@ -119,10 +129,21 @@ class SkillInfo:
     contract_version: str
     tools: Dict[str, Dict[str, Any]]
     problems: List[str]
+    warnings: List[str] = field(default_factory=list)
 
     @property
     def supported(self) -> bool:
         return not self.problems
+
+    def takes_flag(self, tool: str, flag: str) -> bool:
+        """Whether the located ffmpeg-skill's contract declares `flag` (input_schema property name) for `tool`."""
+        spec = self.tools.get(tool) or {}
+        props = (spec.get("input_schema") or {}).get("properties") or {}
+        return isinstance(props, dict) and flag in props
+
+    def optional_flags(self) -> Dict[str, Dict[str, bool]]:
+        """OPTIONAL_FLAGS_USED -> detected (True / False) on this checkout; what doctor reports."""
+        return {tool: {f: self.takes_flag(tool, f) for f in flags} for tool, flags in OPTIONAL_FLAGS_USED.items()}
 
 
 class FfmpegSkill:
@@ -180,15 +201,11 @@ class FfmpegSkill:
             tools = {t["name"]: t for t in doc.get("tools", []) if isinstance(t, dict) and "name" in t}
         except (AudioError, ValueError, OSError) as e:
             problems.append(f"cannot read ffmpeg-skill contract: {getattr(e, 'message', str(e))}")
-        if contract_version != SUPPORTED_CONTRACT_VERSION:
-            problems.append(f"ffmpeg-skill contract_version {contract_version} is not {SUPPORTED_CONTRACT_VERSION}")
-        m = _VERSION_RE.match(version)
-        if not m:
-            problems.append(f"cannot parse ffmpeg-skill version {version!r}")
-        else:
-            v = tuple(int(x) for x in m.groups())
-            if not (SUPPORTED_MIN <= v < SUPPORTED_MAX_EXCLUSIVE):
-                problems.append(f"ffmpeg-skill {version} is outside the supported window [{'.'.join(map(str, SUPPORTED_MIN))}, {'.'.join(map(str, SUPPORTED_MAX_EXCLUSIVE))})")
+        warnings: List[str] = []
+        # No version window: the version string is reported as found, and compatibility is the flag check below.
+        if contract_version != "unknown" and contract_version.split(".")[0] != SUPPORTED_CONTRACT_VERSION.split(".")[0]:
+            warnings.append(f"ffmpeg-skill contract_version {contract_version} differs from {SUPPORTED_CONTRACT_VERSION}; "
+                            "compatibility was decided by the tool / flag check, not by this number")
         for tool, flags in FLAGS_USED.items():
             spec = tools.get(tool)
             if spec is None:
@@ -200,8 +217,11 @@ class FfmpegSkill:
                 problems.append(f"ffmpeg-skill/{tool} lacks flag(s) {missing}")
             if tool in ("audio", "cut", "loudness", "join") and spec.get("audio_only") is not True:
                 problems.append(f"ffmpeg-skill/{tool} does not declare audio_only")
-        self._info = SkillInfo(self.directory, version, contract_version, tools, problems)
+        self._info = SkillInfo(self.directory, version, contract_version, tools, problems, warnings)
         return self._info
+
+    def takes_flag(self, tool: str, flag: str) -> bool:
+        return self.info().takes_flag(tool, flag)
 
     # ---- execution
     def cancel(self) -> None:

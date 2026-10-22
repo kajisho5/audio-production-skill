@@ -6,7 +6,7 @@ Read this first; do not rely on conversation history. Current state and next tas
 
 A deterministic **audio production execution Skill** of the kajisho5 video production ecosystem (README "What it is,
 and what it is not"). It executes a typed operation graph (GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN/OUT, NORMALIZE,
-MIX, CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS) through **ffmpeg-skill ≥ 0.12.0**'s public contract
+MIX, CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS) through **ffmpeg-skill**'s public contract (any version that declares the tools and flags it uses)
 and reports validated artifacts with provenance. It is not an agent, not a measurement skill, not ffmpeg-skill.
 
 ## Boundaries that must hold
@@ -45,9 +45,11 @@ audio-production contract --check tests/contract/contract.json --json
   and note in the PR that the agent must re-pin. Additive keys are fine within a version.
 - Never claim an operation the code cannot run: gaps go to `model.UNSUPPORTED_OPERATIONS` with the reason.
 - New ffmpeg-skill features: verify the real behaviour first (docs/ffmpeg-skill.md records measurements), then
-  raise `adapter.SUPPORTED_MIN` only when the older version is actually unsafe.
-- CI pins ffmpeg-skill by commit in `.github/workflows/tests.yml`; runners ship FFmpeg 6 (Ubuntu) and 8 (macOS,
-  Windows), which behave differently for AAC trim boundaries (docs/ffmpeg-skill.md).
+  detect the capability from the contract (`FLAGS_USED` if required, `OPTIONAL_FLAGS_USED` + `takes_flag()` if the
+  older behaviour still works). Never gate on the ffmpeg-skill version number and never add an upper bound (ADR-15).
+- CI runs every cell against ffmpeg-skill commit `336e0c4` (0.12.2) and against `main` in
+  `.github/workflows/tests.yml`; runners ship FFmpeg 6 (Ubuntu) and 8 (macOS, Windows), which behave differently
+  for AAC trim boundaries (docs/ffmpeg-skill.md).
 - Commit messages and PR bodies follow the existing ones; PRs are squash-merged; the branch cannot be deleted
   through the git proxy (delete it in the GitHub UI).
 - `.github/workflows/release.yml` (ADR-14) tags and releases automatically on push to `main`, resolving the next

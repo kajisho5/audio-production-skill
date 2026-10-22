@@ -66,7 +66,8 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
 5. Validate every intermediate: exists, size > 0, readable, probed audio stream, codec `pcm_s16le`, duration within
    0.1 s of the expected timeline, channel count as derived from the graph, requested sample rate. NORMALIZE's
    post-normalization loudness comes from the `result` field of that same `ffmpeg-skill/loudness` call's `--json`
-   response (ffmpeg-skill >= 0.12.0), not a second process; with `tolerance_lufs` set, an off-target result is a
+   response (ffmpeg-skill >= 0.12.0), not a second process — only a release whose response has no `result` gets a
+   second `--measure-only` call on the output (ADR-15); with `tolerance_lufs` set, an off-target result is a
    `VALIDATION_ERROR`.
 6. Export every output with `ffmpeg-skill/audio` to the requested format and validate it against `expect`.
 7. Return one response document: `ok`, `status`, `plan`, `results`, `outputs` (with provenance), `tool_runs`,
@@ -76,8 +77,10 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
 ## ffmpeg-skill adapter (`adapter.py`)
 
 The only module that starts a process. `locate()` finds the checkout; `info()` reads its contract
-(`_contract.py --json --static`) and checks `contract_version == 1.0`, the version window and that every flag this
-skill emits exists in the tool's `input_schema`; `run_tool()` runs `[sys.executable, scripts/<tool>.py, *argv, --json]`
+(`_contract.py --json --static`) and checks that every tool this skill uses is declared `audio_only` and that every
+flag it emits exists in the tool's `input_schema` — no version window, and a `contract_version` other than `1.x` is a
+doctor warning, not a refusal (ADR-15); `takes_flag()` answers whether an optional flag (`audio --overwrite`,
+`loudness --measure-only`) is declared, and the executor emits it only then; `run_tool()` runs `[sys.executable, scripts/<tool>.py, *argv, --json]`
 in its own process group with a minimal environment and a timeout, and parses the `{"status": "completed"|"failed"}`
 document; `probe()` wraps the one read-only tool (loudness verification is read from the NORMALIZE call's own
 response, not a separate call).
@@ -91,8 +94,9 @@ process exit code is `0` iff `ok`, else `errors.EXIT_CODES[code]`.
 
 ## Versioning
 
-- Package / Skill version: `audio_production.VERSION` (`0.2.0`), carried in every document and in every intermediate manifest.
+- Package / Skill version: `audio_production.VERSION` (`0.4.0`), carried in every document and in every intermediate manifest.
 - Document schemas: `audio-production/{contract,request,response,doctor}@1`, versioned independently; within `@1`
   changes are additive only. Renaming an operation type, a parameter, or changing how an operation is realised bumps
   the minor package version (and therefore every operation identity, by design).
-- ffmpeg-skill compatibility window: contract `1.0`, version `[0.12.0, 1.0.0)`; checked at every run and by `doctor`.
+- ffmpeg-skill compatibility: capability detection (required tools and flags from the checkout's contract), no
+  version window; checked at every run and by `doctor`, which reports the detected optional flags (ADR-15).

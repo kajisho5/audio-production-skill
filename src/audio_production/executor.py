@@ -468,6 +468,8 @@ class Executor:
                     loudness_data = run.data
             st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources))
             if node.type == "NORMALIZE":
+                if not isinstance((loudness_data or {}).get("result"), dict) and self.skill.takes_flag("loudness", "measure_only"):
+                    loudness_data = self._measure_loudness(st, out_path, timeout)
                 self._verify_loudness(st, loudness_data)
         except AudioError:
             self._remove_partial(out_path)
@@ -552,13 +554,28 @@ class Executor:
             raise AudioError("VALIDATION_ERROR", f"{what}: output codec {codec!r} is not {want!r}", {"reason": "codec_mismatch", "path": str(path)})
         return Artifact(path, duration, channels, sr, codec, size, sha256_file(str(path)), audio.get("channel_layout"))
 
+    def _measure_loudness(self, st: NodeState, out_path: Path, timeout: Optional[float]) -> Dict[str, Any]:
+        """Fallback for an ffmpeg-skill whose NORMALIZE --json carries no `result` (releases before 0.12.0): measure
+        the written output with `loudness.py --measure-only`. Its --json document carries the measurement
+        ({input_i, input_tp, input_lra, ...}) at the top level (0.x) or under `measured` (later releases); both are
+        read. Used only when the contract declares measure_only (ADR-15)."""
+        run = self.skill.run_tool("loudness", [str(out_path), "--measure-only"], timeout)
+        st.seconds += run.seconds
+        st.tool_commands += run.commands
+        doc = run.data if isinstance(run.data, dict) else {}
+        measured = next((doc[k] for k in ("result", "measured") if isinstance(doc.get(k), dict)), doc)
+        if "input_i" not in measured:
+            return {}
+        return {"result": dict(measured), "measured_by": "ffmpeg-skill/loudness --measure-only (output re-measured: this release's NORMALIZE response has no result)"}
+
     def _verify_loudness(self, st: NodeState, tool_data: Optional[Dict[str, Any]]) -> None:
         # ffmpeg-skill >= 0.12.0's loudness.py --json includes the post-normalization measurement (`result`) in the
-        # NORMALIZE call's own response, so no second `--measure-only` process is needed to learn what was achieved.
+        # NORMALIZE call's own response; an older release is measured with --measure-only instead (_measure_loudness).
         p = st.node.parameters
         result = (tool_data or {}).get("result")
         if not isinstance(result, dict):
-            raise AudioError("TOOL_ERROR", f"NORMALIZE {st.node.node_id}: ffmpeg-skill/loudness response has no 'result' field (requires ffmpeg-skill >= 0.12.0)",
+            raise AudioError("TOOL_ERROR", f"NORMALIZE {st.node.node_id}: ffmpeg-skill/loudness reported no post-normalization measurement "
+                             "(its response has no 'result' field and its contract declares no --measure-only)",
                              {"reason": "loudness_result_missing"})
         measured: Dict[str, Any] = {"silent": bool(result.get("silent"))}
         for key, name in (("input_i", "integrated_lufs"), ("input_tp", "true_peak_dbtp"), ("input_lra", "loudness_range_lu")):
@@ -566,7 +583,7 @@ class Executor:
                 measured[name] = float(result[key]) if result.get(key) not in (None, "-inf", "inf") else None
             except (TypeError, ValueError, KeyError):
                 measured[name] = None
-        st.measurements["loudness"] = {"measured_by": "ffmpeg-skill/loudness (NORMALIZE result)", "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"],
+        st.measurements["loudness"] = {"measured_by": (tool_data or {}).get("measured_by") or "ffmpeg-skill/loudness (NORMALIZE result)", "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"],
                                        "tolerance_lufs": p.get("tolerance_lufs"), **measured}
         tol = p.get("tolerance_lufs")
         if tol is not None:
@@ -588,7 +605,10 @@ class Executor:
             raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} appeared during execution", {"reason": "exists", "path": str(target)})
         seconds, commands = 0.0, []
         try:
-            run: ToolRun = self.skill.run_tool("audio", [src, "-o", str(target)], timeout)
+            args = [src, "-o", str(target)]
+            if out.overwrite and self.skill.takes_flag("audio", "overwrite"):
+                args.append("--overwrite")   # ffmpeg-skill >= 1.10 refuses to replace an existing file without it
+            run: ToolRun = self.skill.run_tool("audio", args, timeout)
             seconds, commands = run.seconds, run.commands
             export_state = NodeState(Node(f"output:{out.output_id}", "EXPORT", [st.node.node_id]), stable_hash({"export": st.identity, "format": out.format}))
             export_state.segments = st.segments
