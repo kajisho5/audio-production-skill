@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Decide the version this push should release, without ever executing untrusted text: every value
 # either comes from `git` (read at runtime, never spliced into a workflow `run:` block via `${{ }}`)
-# or from the trusted `resolved-version` output of release-drafter's dry run.
+# or from the trusted `resolved_version` output of release-drafter's dry run.
 #
 # Rule (see CLAUDE.md / docs/STATE.md "release automation"):
 #   - auto-bump fires ONLY when pyproject.toml's current version already equals the latest release
@@ -14,7 +14,7 @@
 #
 # Inputs (environment):
 #   CURRENT_VERSION           required; from pyproject.toml, e.g. "0.3.0"
-#   DRAFTER_RESOLVED_VERSION  release-drafter's dry-run `resolved-version` output; only read when
+#   DRAFTER_RESOLVED_VERSION  release-drafter's dry-run `resolved_version` output; only read when
 #                             the auto-bump branch is taken. May be unset/empty otherwise.
 #
 # Output: writes `next_version`, `latest_tag`, `mode` (auto|manual) and `should_release` (true|false)
@@ -35,10 +35,12 @@ latest_version="${latest_tag#v}"
 if [ -n "$latest_tag" ] && [ "$latest_version" = "$CURRENT_VERSION" ]; then
   mode="auto"
   if [ -z "${DRAFTER_RESOLVED_VERSION:-}" ]; then
-    echo "compute_version.sh: mode=auto but DRAFTER_RESOLVED_VERSION is empty" >&2
-    exit 1
+    # nothing merged since the last tag resolves to a version: no release, said rather than failed
+    echo "compute_version.sh: nothing to release (no version resolved since ${latest_tag})" >&2
+    next_version="$CURRENT_VERSION"
+  else
+    next_version="${DRAFTER_RESOLVED_VERSION#v}"
   fi
-  next_version="${DRAFTER_RESOLVED_VERSION#v}"
 else
   mode="manual"
   next_version="$CURRENT_VERSION"
