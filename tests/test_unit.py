@@ -347,3 +347,26 @@ def test_windows_style_paths_are_handled():
 
 def test_version_is_semver():
     assert len(VERSION.split(".")) == 3
+
+
+def test_partial_output_removal_waits_until_the_file_is_deletable(tmp_path, monkeypatch):
+    """A killed tool's ffmpeg can hold its output open for a moment (Windows: unlink raises PermissionError until the
+    handle is released). _remove_partial must retry until the file is really gone, not swallow the first failure."""
+    from pathlib import Path
+    from audio_production.executor import Executor
+    target = tmp_path / "partial.wav"
+    target.write_bytes(b"x")
+    real_unlink = Path.unlink
+    calls = {"n": 0}
+
+    def busy_unlink(self, *a, **kw):
+        calls["n"] += 1
+        if self == target and calls["n"] <= 3:
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        return real_unlink(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "unlink", busy_unlink)
+    Executor._remove_partial(target)
+    assert not target.exists() and calls["n"] == 4
+    Executor._remove_partial(target)                            # already gone: returns at once
+    assert calls["n"] == 4

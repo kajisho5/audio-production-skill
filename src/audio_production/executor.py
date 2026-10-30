@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +34,9 @@ MANIFEST_SCHEMA = f"{SKILL_ID}/manifest@1"
 #   keep           intermediates and manifests stay, so an identical re-run reuses them (default)
 #   intermediates  the project's work directory is removed once every output is exported and validated
 CLEANUP_POLICIES = ("keep", "intermediates")
+# seconds a partial output may take to become deletable after its writer was killed (Windows releases a killed
+# process's file handles asynchronously; see Executor._remove_partial)
+PARTIAL_REMOVE_SETTLE = 10.0
 
 # tool selection per node type (ffmpeg-skill tool, extra capabilities beyond ffmpeg/ffprobe)
 TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
@@ -524,12 +528,22 @@ class Executor:
         return True
 
     @staticmethod
-    def _remove_partial(path: Path) -> None:
-        try:
-            if path.exists():
-                path.unlink()
-        except OSError:
-            pass
+    def _remove_partial(path: Path, settle: float = PARTIAL_REMOVE_SETTLE) -> None:
+        """Remove a partial file, and make sure it is gone. After a timeout / cancellation the killed tool's ffmpeg
+        grandchild can still hold its output open for a moment: Windows refuses to delete an open file
+        (PermissionError, sharing violation) and TerminateProcess releases the handles asynchronously, after
+        `taskkill` and the direct child's exit have already returned. So the unlink is retried until the file is
+        gone or `settle` seconds have passed; on the normal path the first attempt removes it and nothing waits."""
+        deadline = time.monotonic() + settle
+        while True:
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError:
+                pass
+            if not path.exists() or time.monotonic() >= deadline:
+                return
+            time.sleep(0.05)
 
     # ---- validation
     def _validate_artifact(self, path: Path, st: NodeState, expected_channels: Optional[int] = None, expect: Optional[Dict[str, Any]] = None,
