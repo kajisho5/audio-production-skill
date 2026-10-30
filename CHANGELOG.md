@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.2 - 2026-10-30
+
+- fix: distinct fade capability ids and ffmpeg-skill dependency in the contract (#21) (0159066)
+
 ## v0.4.1 - 2026-10-30
 
 - Add ECOSYSTEM_ROADMAP.md: gaps, wiring and PR-sized steps from the 2026-10-30 ecosystem audit (#20) (134ec45)
