@@ -9,6 +9,9 @@ on:
 # Compatibility with ffmpeg-skill is capability detection, not a version window (docs/decisions.md ADR-15), so
 # every OS / Python cell runs against BOTH the oldest commit this skill is verified with (0.12.2, the pre-1.10
 # behaviour: no --overwrite, NORMALIZE result in the call's own response) and ffmpeg-skill's current main.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: test (${{ matrix.os }}, py${{ matrix.python }}, ffmpeg-skill ${{ matrix.ffmpeg_skill }})
