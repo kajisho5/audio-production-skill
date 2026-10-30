@@ -5,9 +5,9 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 
 ## CURRENT (main)
 
-- Skill `audio-production` 0.4.0, contract `audio-production/contract@1`, one tool `audio-production/run`, 14
-  operation types; sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
-  `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS` take `audio_stream`
+- Skill `audio-production` 0.4.0, contract `audio-production/contract@1`, one tool `audio-production/run`, 15
+  operation types (VOICE_CLEANUP added 2026-10-30, ADR-16); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
+  `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS`, `VOICE_CLEANUP` take `audio_stream`
   (0-based, default 0) to pick which audio stream of their one input `ffmpeg-skill/audio` processes.
 - Execution through any ffmpeg-skill whose contract declares the required tools and flags — no version window
   (ADR-15) — (`probe`, `audio`, `cut --accurate`, `loudness`, `join`); NORMALIZE verification reads the `result` field
@@ -45,6 +45,10 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
    to it (or the push step in release.yml needs converting to open a PR instead). Do not claim PyPI availability
    before a human confirms a publish actually ran.
 2. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
+3. NOISE_REDUCTION `strength_db` accepts [10, 60] but ffmpeg-skill maps it to afftdn `nf=-<strength>`, valid only in
+   [−80, −20]: 10 ≤ strength_db < 20 fails at run time with `TOOL_ERROR` (measured on FFmpeg 6.1, docs/ffmpeg-skill.md).
+   Raising the minimum to 20 is a change to a pinned operation's parameters (agent re-pin). VOICE_CLEANUP is not
+   affected (fixed `nf=-25`).
 
 ## Known limitations (see README "Current limitations")
 
@@ -98,3 +102,9 @@ reported `unknown` by doctor; no eviction.
   (`version_window` → `compatibility` + `optional_flags_used`), so `VERSION` bumped to `0.4.0` and
   `tests/contract/contract.json` regenerated — video-production-agent must re-pin. CI runs every cell against
   `336e0c4` (0.12.2) and ffmpeg-skill `main`, plus a daily schedule.
+- 2026-10-30: VOICE_CLEANUP (ECOSYSTEM_ROADMAP step 3, ADR-16): typed wrapper of `ffmpeg-skill/audio --voice`,
+  `level` light | medium | strong (required) + `audio_stream`; `voice` added to `adapter.FLAGS_USED["audio"]`; level
+  form detected from the contract (`--voice <level>` on >= 1.13, bare `--voice` = medium on 0.12.2 … 1.12, other
+  levels refused at planning); `doctor` reports `checks.ffmpeg_skill.voice_levels`; capability id
+  `audio.voice_cleanup`. Breaking for pinning agents (an operation added; `tools`, `provides`, `ffmpeg_skill` blocks
+  changed); `tests/contract/contract.json` regenerated, version left to the release workflow.

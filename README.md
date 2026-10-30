@@ -57,7 +57,7 @@ FFmpeg (`ffmpeg` + `ffprobe`) on PATH for ffmpeg-skill. Install: `pip install -e
 | | [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) | [media-analysis-skill](https://github.com/kajisho5/media-analysis-skill) | **audio-production-skill** | [video-production-agent](https://github.com/kajisho5/video-production-agent) |
 |---|---|---|---|---|
 | Role | low-level media execution engine (hands) | measurement / observation (meters) | **audio production execution** (typed audio operations) | reasoning / decision / planning / orchestration (brain) |
-| Does | runs ffmpeg for cut, audio post, loudness, join, export, … | measures loudness, silence, streams, integrity | executes GAIN / TRIM / CUT / SILENCE_REMOVE / FADE / NORMALIZE / MIX / CONCAT / MONO / STEREO / DOWNMIX / NOISE_REDUCTION / DYNAMICS as a dependency graph, validates every artifact, records provenance | decides *whether* and *what* to process, builds the request |
+| Does | runs ffmpeg for cut, audio post, loudness, join, export, … | measures loudness, silence, streams, integrity | executes GAIN / TRIM / CUT / SILENCE_REMOVE / FADE / NORMALIZE / MIX / CONCAT / MONO / STEREO / DOWNMIX / NOISE_REDUCTION / DYNAMICS / VOICE_CLEANUP as a dependency graph, validates every artifact, records provenance | decides *whether* and *what* to process, builds the request |
 | Never | holds a project model | edits or writes media | measures for decisions, decides which ranges are silence, invents parameters, runs ffmpeg directly, accepts commands / filters | runs ffmpeg |
 
 - **audio-production-skill ≠ media-analysis-skill.** media-analysis-skill says "silence from 0.0 to 2.0 s, −23.1 LUFS".
@@ -122,10 +122,10 @@ removed key) or **additive** (a new key outside the pinned blocks); exit 1 on pr
 against `tests/contract/contract.json`; regenerate that file when a contract change is intended. Pinned blocks and
 the versioning rules: [docs/contract.md](docs/contract.md).
 
-`provides` lists this Skill's fourteen operations by their cross-repository Capability id (`audio.gain`,
+`provides` lists this Skill's fifteen operations by their cross-repository Capability id (`audio.gain`,
 `audio.trim`, `audio.cut`, `audio.silence_remove`, `audio.fade_in`, `audio.fade_out`, `audio.normalize`,
 `audio.mix`, `audio.mono`, `audio.stereo`, `audio.downmix`, `audio.noise_reduction`, `audio.dynamics`,
-`audio.concat`), each with the `operation` it maps to, its `tool_id` (always `audio-production/run`, since this
+`audio.concat`, `audio.voice_cleanup`), each with the `operation` it maps to, its `tool_id` (always `audio-production/run`, since this
 Skill exposes one execution tool), and a `lifecycle`. This is a different vocabulary from the "Capabilities" above
 (video-production-agent's environment/binary `CapabilityResolver` checks, e.g. `ffmpeg`, `filter:<name>`): `provides`
 is for `kajisho5/AI-video-production-OS`'s `CapabilityContract.provides` (see that project's `docs/SPEC.md` and
@@ -228,6 +228,7 @@ Repository guide for future sessions: [CLAUDE.md](CLAUDE.md); current / experime
 | `DOWNMIX` | 1 | – | `audio --downmix` | requires 5.1 / 7.1 |
 | `NOISE_REDUCTION` | 1 | `mode: "fft"`, `strength_db` [10, 60] | `audio --denoise` (afftdn) | the only implemented mode |
 | `DYNAMICS` | 1 | `gate {threshold_db, ratio, attack_ms, release_ms, range_db, knee_db}`, `compressor {threshold_db, ratio, attack_ms, release_ms, makeup_db, knee_db}`, `limiter {ceiling_db, attack_ms, release_ms}` (≥ 1 stage) | `audio --gate/--compress/--limit` (agate, acompressor, alimiter) | fixed order gate → compressor → limiter; omitted fields keep ffmpeg's defaults |
+| `VOICE_CLEANUP` | 1 | `level: "light" \| "medium" \| "strong"` (required, no default) | `audio --voice <level>` (bare `--voice` = medium on ffmpeg-skill < 1.13) | ffmpeg-skill's fixed speech chains: light = highpass 80 Hz + compressor; medium = highpass, de-esser, afftdn (fixed −25 dB floor), compressor; strong = medium + harder de-esser, second compressor, limiter at −1 dBFS. Nothing in a chain is tunable. A level the located ffmpeg-skill does not declare is refused at planning with `TOOL_ERROR` `voice_level_unsupported` (ADR-16) |
 | `CONCAT` | 2..32 | `crossfade` (s, default 0), `sample_rate`, `channels` (1/2/6/8) | `join --transition none\|fade --duration` (concat / acrossfade) | output layout = widest input unless `channels`; total = Σ − (n−1)·crossfade |
 
 Output formats (`outputs[].format`): `wav` (pcm_s16le), `flac`, `mp3`, `m4a`, `aac`, `ogg`, `opus`; encoder
@@ -358,7 +359,7 @@ does). Measured on ffmpeg 6.1.1 / ffmpeg-skill 0.9.1, re-verified against ffmpeg
 
 ## Current limitations
 
-- `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION` and `DYNAMICS` take an `audio_stream`
+- `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS` and `VOICE_CLEANUP` take an `audio_stream`
   parameter (0-based, default 0) selecting which audio stream of their one input to process (ffmpeg-skill/audio
   `--audio-stream`). `TRIM`, `CUT`, `SILENCE_REMOVE`, `NORMALIZE`, `MIX` and `CONCAT` always use the first audio
   stream: ffmpeg-skill's `cut` / `loudness` / `join` tools have no `--audio-stream` flag, and `MIX` folds already-

@@ -179,6 +179,43 @@ def test_dynamics(workspace):
         assert d["ok"] is False and d["error"]["code"] == "INVALID_REQUEST", bad
 
 
+def test_voice_cleanup(workspace, skill_dir):
+    """VOICE_CLEANUP runs ffmpeg-skill/audio --voice on real audio: medium on every ffmpeg-skill (the bare --voice chain
+    of releases before 1.13), light / strong where the located contract declares the levels, refused before any tool
+    runs where it does not. The afftdn noise floor ffmpeg-skill uses inside the chain is within afftdn's valid range."""
+    import re
+    from audio_production.adapter import FfmpegSkill
+    from audio_production.model import VOICE_LEVELS
+    levels = FfmpegSkill(skill_dir).info().voice_levels()
+    assert "medium" in levels
+    for level in VOICE_LEVELS:
+        code, d = run(request_doc([op("v", "VOICE_CLEANUP", ["track:t1"], level=level)]))
+        if level not in levels:
+            assert d["ok"] is False and d["error"]["code"] == "TOOL_ERROR" and d["error"]["details"]["reason"] == "voice_level_unsupported", d
+            assert d["error"]["details"]["available_levels"] == levels and not (workspace / "out" / "main.wav").exists()
+            assert not any(r["tool"] == "ffmpeg-skill/audio" for r in d.get("tool_runs", []))
+            continue
+        assert code == 0 and d["ok"], (level, d.get("error"))
+        r = results(d)["op:v"]
+        assert r["tool"] == "ffmpeg-skill/audio" and r["status"] == "completed" and abs(r["artifact"]["duration"] - 6.0) < 0.05 and r["artifact"]["channels"] == 1
+        assert r["parameters"] == {"level": level, "audio_stream": 0}
+        assert r["measurements"]["voice_cleanup"]["level"] == level
+        cmds = " ".join(r["tool_commands_observed"])
+        assert "highpass=f=80" in cmds and "acompressor" in cmds and "--denoise" not in cmds
+        assert ("deesser" in cmds and "afftdn" in cmds) == (level != "light")
+        assert ("alimiter" in cmds) == (level == "strong")
+        for nf in re.findall(r"afftdn=nf=(-?[0-9.]+)", cmds):
+            assert -80.0 <= float(nf) <= -20.0, nf                                 # afftdn refuses nf outside [-80, -20]
+        chain = d["outputs"][0]["provenance"]["operations"]
+        assert any(c["type"] == "VOICE_CLEANUP" and c["parameters"]["level"] == level and c["output_hash"] == r["artifact"]["sha256"] for c in chain)
+    code, d = run(request_doc([op("v", "VOICE_CLEANUP", ["track:t1"], level="medium")]), "--dry-run")
+    assert d["ok"] and d["dry_run"] and not (workspace / "out" / "main.wav").exists()
+    for bad, want in (({}, "INVALID_REQUEST"), ({"level": "max"}, "UNSUPPORTED_OPERATION"), ({"level": "medium", "denoise_strength": 30}, "INVALID_REQUEST"),
+                      ({"level": "medium", "filter": "highpass"}, "INVALID_REQUEST")):
+        code, d = run(request_doc([op("v", "VOICE_CLEANUP", ["track:t1"], **bad)]))
+        assert d["ok"] is False and d["error"]["code"] == want, (bad, d["error"])
+
+
 def test_audio_stream_selects_the_correct_track(workspace):
     """multitrack.mka (fixtures/generate.py) muxes two mono streams with an objective, easy-to-measure difference:
     stream 0 a quiet 300 Hz tone (mean_volume ~ -29 dBFS), stream 1 a loud 900 Hz tone (~ -9 dBFS), 20 dB apart.

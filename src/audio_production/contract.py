@@ -18,14 +18,14 @@ CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
 # `CapabilityContract.provides`), matching the ids already assigned to this Skill's
 # operations in that project's own docs/CAPABILITY_MATRIX.md. Every operation type maps
 # 1:1 to its own id (FADE_IN / FADE_OUT are `audio.fade_in` / `audio.fade_out`: a
-# registry keys capabilities by id, so one id per entry). All fourteen always write a
+# registry keys capabilities by id, so one id per entry). All fifteen always write a
 # validated audio artifact through the single `{SKILL_ID}/run` tool, so none is excluded
 # the way `thumbnail/validate` is elsewhere.
 CAPABILITY_IDS: Dict[str, str] = {
     "GAIN": "audio.gain", "TRIM": "audio.trim", "CUT": "audio.cut", "SILENCE_REMOVE": "audio.silence_remove",
     "FADE_IN": "audio.fade_in", "FADE_OUT": "audio.fade_out", "NORMALIZE": "audio.normalize", "MIX": "audio.mix",
     "MONO": "audio.mono", "STEREO": "audio.stereo", "DOWNMIX": "audio.downmix", "NOISE_REDUCTION": "audio.noise_reduction",
-    "DYNAMICS": "audio.dynamics", "CONCAT": "audio.concat",
+    "DYNAMICS": "audio.dynamics", "CONCAT": "audio.concat", "VOICE_CLEANUP": "audio.voice_cleanup",
 }
 
 
@@ -82,7 +82,7 @@ def skill_contract() -> Dict[str, Any]:
         "schema": CONTRACT_SCHEMA_ID, "skill_id": SKILL_ID, "id": SKILL_ID, "name": PACKAGE_NAME, "package": PACKAGE_NAME, "version": VERSION,
         "kind": "execution", "role": "audio production (processing); not measurement, not decision",
         "description": "Deterministic audio production execution: gain, sample-accurate trim / cut, silence removal (explicit ranges), fades, EBU R128 loudness "
-                       "normalisation, mix, concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), format conversion and "
+                       "normalisation, mix, concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), speech clean-up presets, format conversion and "
                        "audio extraction from video containers; typed operation graph in, validated artifacts with provenance out. Not an AI agent.",
         "repository": "https://github.com/kajisho5/audio-production-skill",
         "not_provided": ["AI reasoning", "decisions", "production plans", "loudness or silence measurement for decisions (media-analysis-skill)", "speech recognition",

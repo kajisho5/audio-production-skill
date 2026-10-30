@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +34,9 @@ MANIFEST_SCHEMA = f"{SKILL_ID}/manifest@1"
 #   keep           intermediates and manifests stay, so an identical re-run reuses them (default)
 #   intermediates  the project's work directory is removed once every output is exported and validated
 CLEANUP_POLICIES = ("keep", "intermediates")
+# seconds a partial output may take to become deletable after its writer was killed (Windows releases a killed
+# process's file handles asynchronously; see Executor._remove_partial)
+PARTIAL_REMOVE_SETTLE = 10.0
 
 # tool selection per node type (ffmpeg-skill tool, extra capabilities beyond ffmpeg/ffprobe)
 TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
@@ -50,6 +54,7 @@ TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
     "DOWNMIX": ("audio", ["filter:pan"]),
     "NOISE_REDUCTION": ("audio", ["filter:afftdn"]),
     "DYNAMICS": ("audio", ["filter:acompressor", "filter:alimiter", "filter:agate"]),
+    "VOICE_CLEANUP": ("audio", ["filter:highpass", "filter:deesser", "filter:afftdn", "filter:acompressor", "filter:alimiter"]),
     "CONCAT": ("join", ["filter:acrossfade"]),
     "EXPORT": ("audio", []),
 }
@@ -303,6 +308,10 @@ class Executor:
                 raise AudioError("INVALID_REQUEST", f"{where}: every MIX input is muted", {"node_id": node.node_id})
         elif node.type == "CONCAT":
             st.segments = concat([i.segments for i in ins], p.get("crossfade", 0.0))
+        elif node.type == "VOICE_CLEANUP":
+            # refused here, at planning (dry run included), when the located ffmpeg-skill cannot run this level
+            st.measurements["voice_cleanup"] = {"level": p["level"], "ffmpeg_skill_flag": " ".join(self._voice_flag(p["level"], where))}
+            st.segments = list(ins[0].segments)
         elif node.type in ("MONO", "STEREO", "DOWNMIX"):
             ch = self._expected_channels(states, ins[0], sources)
             if node.type == "MONO" and ch != 2:
@@ -314,6 +323,21 @@ class Executor:
             st.segments = list(ins[0].segments)
         else:
             st.segments = list(ins[0].segments)
+
+    def _voice_flag(self, level: str, where: str) -> List[str]:
+        """ffmpeg-skill/audio's --voice for `level`, detected from the located contract (ADR-16): `--voice <level>` when
+        the flag declares its levels (>= 1.13), the bare `--voice` -- the medium chain -- when it is the older boolean
+        switch; any other combination is refused before a tool runs instead of silently running a different chain."""
+        info = self.skill.info()
+        choices = info.flag_choices("audio", "voice")
+        if choices is not None and level in choices:
+            return ["--voice", level]
+        if choices is None and level == "medium":
+            return ["--voice"]
+        raise AudioError("TOOL_ERROR", f"{where}: VOICE_CLEANUP level {level!r} is not offered by the located ffmpeg-skill ({info.version}); "
+                         f"its --voice runs {info.voice_levels() or 'no level'}",
+                         {"reason": "voice_level_unsupported", "level": level, "available_levels": info.voice_levels(), "ffmpeg_skill_version": info.version},
+                         retryable=False)
 
     def _expected_channels(self, states: Dict[str, NodeState], st: NodeState, sources: Dict[str, Dict[str, Any]]) -> int:
         """Channel count a node's artifact will have, derived without running anything."""
@@ -398,6 +422,9 @@ class Executor:
             return [("audio", [src, "--downmix", "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "NOISE_REDUCTION":
             return [("audio", [src, "--denoise", "--denoise-strength", fmt_db(p["strength_db"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
+        if node.type == "VOICE_CLEANUP":
+            # --voice only: never with --denoise (ffmpeg-skill ignores --denoise / --denoise-strength under --voice)
+            return [("audio", [src, *self._voice_flag(p["level"], f"operation {node.node_id}"), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "DYNAMICS":
             args = [src]
             for stage, flag, prefix in (("gate", "--gate", "gate"), ("compressor", "--compress", "comp"), ("limiter", "--limit", "limit")):
@@ -501,12 +528,22 @@ class Executor:
         return True
 
     @staticmethod
-    def _remove_partial(path: Path) -> None:
-        try:
-            if path.exists():
-                path.unlink()
-        except OSError:
-            pass
+    def _remove_partial(path: Path, settle: float = PARTIAL_REMOVE_SETTLE) -> None:
+        """Remove a partial file, and make sure it is gone. After a timeout / cancellation the killed tool's ffmpeg
+        grandchild can still hold its output open for a moment: Windows refuses to delete an open file
+        (PermissionError, sharing violation) and TerminateProcess releases the handles asynchronously, after
+        `taskkill` and the direct child's exit have already returned. So the unlink is retried until the file is
+        gone or `settle` seconds have passed; on the normal path the first attempt removes it and nothing waits."""
+        deadline = time.monotonic() + settle
+        while True:
+            try:
+                if path.exists():
+                    path.unlink()
+            except OSError:
+                pass
+            if not path.exists() or time.monotonic() >= deadline:
+                return
+            time.sleep(0.05)
 
     # ---- validation
     def _validate_artifact(self, path: Path, st: NodeState, expected_channels: Optional[int] = None, expect: Optional[Dict[str, Any]] = None,

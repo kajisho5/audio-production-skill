@@ -61,7 +61,8 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
    manifest `<identity[:16]>.json`; if both exist, the manifest matches the identity and input hashes and the file's
    sha256 matches, the node is `reused`. TRIM / CUT / SILENCE_REMOVE run `ffmpeg-skill/cut --accurate` (sample
    precision, recorded in `measurements.cut`). MIX folds pairwise through `ffmpeg-skill/audio --music` with `.mixN.wav`
-   sidecars; CONCAT is one `ffmpeg-skill/join` call; DYNAMICS one `ffmpeg-skill/audio` call with typed flags.
+   sidecars; CONCAT is one `ffmpeg-skill/join` call; DYNAMICS one `ffmpeg-skill/audio` call with typed flags; VOICE_CLEANUP one `ffmpeg-skill/audio --voice` call (level form
+   detected from the contract at planning, ADR-16).
    Sidecars are always removed; on failure the intermediate is removed too.
 5. Validate every intermediate: exists, size > 0, readable, probed audio stream, codec `pcm_s16le`, duration within
    0.1 s of the expected timeline, channel count as derived from the graph, requested sample rate. NORMALIZE's

@@ -19,10 +19,12 @@ from audio_production.doctor import doctor_report
 from conftest import one_json, request_doc, run_cli
 
 
-def _contract_doc(version="2.10.3", contract_version="1.0", optional=True, drop=None):
+def _contract_doc(version="2.10.3", contract_version="1.0", optional=True, drop=None, voice=None):
     tools = []
     for tool in TOOLS_USED:
         props = {f: {"type": "string"} for f in FLAGS_USED[tool]}
+        if tool == "audio" and voice is not None:
+            props["voice"] = voice
         if optional:
             props.update({f: {"type": "boolean"} for f in OPTIONAL_FLAGS_USED.get(tool, ())})
         if drop and drop[0] == tool:
@@ -184,3 +186,67 @@ def test_normalize_without_result_or_measure_only_is_a_tool_error(workspace, ski
     code, d = _run(_normalize_doc(), "--ffmpeg-skill", str(fake))
     assert d["ok"] is False and d["error"]["code"] == "TOOL_ERROR" and d["error"]["details"]["reason"] == "loudness_result_missing"
     assert not (workspace / "out" / "main.wav").exists()
+
+
+# ---- VOICE_CLEANUP: --voice levels are detected from the contract (ADR-16)
+_VOICE_BOOL = {"cli": ["--voice"], "type": "boolean"}                                     # ffmpeg-skill < 1.13
+_VOICE_ENUM = {"cli": ["--voice"], "type": "string", "enum": ["light", "medium", "strong"]}   # ffmpeg-skill >= 1.13
+
+
+def test_voice_levels_are_detected_from_the_contract(tmp_path):
+    old = FfmpegSkill(_fake_skill(tmp_path / "old", _contract_doc("0.12.2", voice=_VOICE_BOOL))).info()
+    new = FfmpegSkill(_fake_skill(tmp_path / "new", _contract_doc("2.21.0", voice=_VOICE_ENUM))).info()
+    assert old.supported and new.supported
+    assert old.flag_choices("audio", "voice") is None and old.voice_levels() == ["medium"]
+    assert new.flag_choices("audio", "voice") == ["light", "medium", "strong"] and new.voice_levels() == ["light", "medium", "strong"]
+    gone = FfmpegSkill(_fake_skill(tmp_path / "gone", _contract_doc("2.21.0", drop=("audio", "voice")))).info()
+    assert not gone.supported and any("voice" in p for p in gone.problems) and gone.voice_levels() == []
+
+
+def _voice_argv(skill_root: Path, workspace: Path, level: str):
+    from audio_production import executor
+    from audio_production.executor import Executor, NodeState
+    from audio_production.graph import OperationGraph
+    from audio_production.model import parse_request
+    from audio_production.security import PathPolicy
+    ex = Executor(PathPolicy(str(workspace)), FfmpegSkill(skill_root))
+    sources = {"a": {"source_id": "a", "path": str(workspace / "tone.wav"), "sha256": "0" * 64, "size": 1, "duration": 6.0,
+                     "channels": 1, "sample_rate": 48000, "codec": "pcm_s16le", "channel_layout": None, "has_video": False}}
+    req = parse_request(request_doc([{"op_id": "v", "type": "VOICE_CLEANUP", "inputs": ["track:t1"], "parameters": {"level": level, "audio_stream": 1}}]))
+    g = OperationGraph(req.project)
+    states = {n: NodeState(g.nodes[n]) for n in g.order}
+    for n in g.order:
+        ex._plan_node(states, states[n], sources)
+    states["track:t1"].artifact = executor.Artifact(Path(sources["a"]["path"]), 6.0, 1, 48000, "pcm_s16le", 1, "0" * 64)
+    return states["op:v"], ex._argv(states["op:v"], states, sources, workspace / "o.wav")
+
+
+def test_voice_argv_follows_the_detected_form(tmp_path):
+    from audio_production.errors import AudioError
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    new = _fake_skill(tmp_path / "new", _contract_doc("2.21.0", voice=_VOICE_ENUM))
+    old = _fake_skill(tmp_path / "old", _contract_doc("0.12.2", voice=_VOICE_BOOL))
+    for level in ("light", "medium", "strong"):
+        st, calls = _voice_argv(new, ws, level)
+        assert calls == [("audio", [str(ws / "tone.wav"), "--voice", level, "--audio-stream", "1", "-o", str(ws / "o.wav")])]
+        assert st.measurements["voice_cleanup"] == {"level": level, "ffmpeg_skill_flag": f"--voice {level}"}
+    st, calls = _voice_argv(old, ws, "medium")                    # the boolean switch is the medium chain
+    assert calls == [("audio", [str(ws / "tone.wav"), "--voice", "--audio-stream", "1", "-o", str(ws / "o.wav")])]
+    for level in ("light", "strong"):                            # never silently run the medium chain instead
+        with pytest.raises(AudioError) as ei:
+            _voice_argv(old, ws, level)
+        assert ei.value.code == "TOOL_ERROR" and ei.value.details["reason"] == "voice_level_unsupported"
+        assert ei.value.details["available_levels"] == ["medium"] and ei.value.retryable is False
+
+
+def test_detected_voice_levels_match_the_real_tool(skill_dir):
+    """The contract's --voice declaration agrees with the installed audio.py's own --help."""
+    info = FfmpegSkill(skill_dir).info()
+    help_text = _help(skill_dir, "audio")
+    assert "--voice" in help_text
+    if info.flag_choices("audio", "voice") is None:
+        assert info.voice_levels() == ["medium"] and "{light,medium,strong}" not in help_text
+    else:
+        assert "{" + ",".join(info.voice_levels()) + "}" in help_text
+    assert doctor_report(str(skill_dir))["checks"]["ffmpeg_skill"]["voice_levels"] == info.voice_levels()

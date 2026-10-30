@@ -100,3 +100,23 @@
   so a new ffmpeg-skill release is exercised without a commit here. Pinned by `tests/test_ffmpeg_skill_compat.py`.
   Breaking for the pinned `ffmpeg_skill` contract block (`version_window` removed, `compatibility` and
   `optional_flags_used` added): `VERSION` bumps to `0.4.0`, video-production-agent must re-pin.
+- **ADR-16 VOICE_CLEANUP wraps `ffmpeg-skill/audio --voice` as a typed level, detected from the contract.** The
+  speech chains ffmpeg-skill ships (light / medium / strong, see docs/ffmpeg-skill.md) are exposed as one operation
+  with one required enum `level` and `audio_stream` — nothing else, because `--voice` takes nothing else: inventing
+  a strength or cutoff here would be a parameter the engine never receives. `level` has no default (ADR-3: the
+  caller decides; ffmpeg-skill's own bare-flag default `medium` is not taken over). The flag changed shape in
+  ffmpeg-skill 1.13 (boolean switch → `light|medium|strong`, bare = medium, byte-identical chain), and CI runs both
+  shapes (0.12.2 and `main`), so `voice` is a required flag in `FLAGS_USED` and the form is chosen per run from the
+  located contract's `input_schema` (`enum` present → `--voice <level>`; boolean → bare `--voice`, `medium` only).
+  A level the located ffmpeg-skill cannot run is refused at planning (dry run included) with `TOOL_ERROR`
+  `voice_level_unsupported`, `retryable: false`, `details.available_levels` — never silently substituted by the
+  medium chain, and never by a version comparison (ADR-15). `--denoise` / `--denoise-strength` are never emitted
+  with `--voice` (audio.py ignores them under `--voice`). The medium / strong chains contain afftdn with a fixed
+  `nf=-25`, inside afftdn's valid [−80, −20]; there is no caller-controlled value that could reach the out-of-range
+  `nf` that NOISE_REDUCTION's `strength_db` < 20 produces (recorded as a separate PLANNED item, not changed here).
+  Required capabilities list every filter any level may use (`highpass`, `deesser`, `afftdn`, `acompressor`,
+  `alimiter`), as DYNAMICS lists all three stages. Provenance: the operation's `parameters` (`level`), the
+  `measurements.voice_cleanup` record of the flag form actually passed, and ffmpeg-skill's observed ffmpeg command
+  (the full filter chain) in `tool_commands_observed`. Capability id `audio.voice_cleanup`. Adding an operation
+  is breaking for pinning agents (docs/contract.md): `tests/contract/contract.json` is regenerated, and the version
+  is bumped by the release workflow from the PR label (ADR-14), not by hand.
