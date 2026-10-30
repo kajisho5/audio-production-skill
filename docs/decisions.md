@@ -26,8 +26,9 @@
   capability-shaped id of its own (unlike video-editing-skill's `operations.OPERATIONS`), so the id per operation
   type is a new naming decision, not a mechanical derivation — it matches the ids already assigned in that
   project's own `docs/CAPABILITY_MATRIX.md`, kept here in `contract.CAPABILITY_IDS` as the single source of truth
-  going forward. `FADE_IN` and `FADE_OUT` are both directions of one `audio.fade` capability; the other twelve
-  operation types map 1:1. Every operation type gets an id: this Skill has a single tool (`{SKILL_ID}/run`) and
+  going forward. Every operation type maps 1:1 (`FADE_IN` / `FADE_OUT` were one shared `audio.fade` until
+  2026-10-30; split into `audio.fade_in` / `audio.fade_out` because the OS registry keys capabilities by id, and a
+  duplicate id made the two operations indistinguishable there). Every operation type gets an id: this Skill has a single tool (`{SKILL_ID}/run`) and
   every operation always writes a validated audio artifact through it, unlike `thumbnail-skill`'s `validate` tool,
   which produces no output and is excluded there. Additive: it adds a new top-level `provides` key derived from
   `OPERATION_TYPES` and says nothing `operations[]` doesn't already say, only indexed by Capability id instead of

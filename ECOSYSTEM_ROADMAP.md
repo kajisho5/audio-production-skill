@@ -25,7 +25,7 @@ Agent plans 9 ops; MIX, SILENCE_REMOVE, NOISE_REDUCTION, DYNAMICS are executable
 
 ## Steps
 
-- [ ] **1. Contract dependencies + split audio.fade** — dependency on ffmpeg-skill; audio.fade_in / audio.fade_out ids
+- [x] **1. Contract dependencies + split audio.fade** — dependency on ffmpeg-skill; audio.fade_in / audio.fade_out ids
   - Done when: OS dependency_version_ranges PASS
 - [ ] **2. MIX ducking / effects** — typed duck and effects params -> ffmpeg-skill/audio
   - Done when: music bed lower under speech (integration)

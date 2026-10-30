@@ -102,6 +102,17 @@ def test_pinned_contract_matches_live():
     assert rep["drift"] == {"breaking": [], "additive": []}
 
 
+def test_os_registry_provides_and_dependencies():
+    live = skill_contract()
+    ids = [p["id"] for p in live["provides"]]
+    assert len(ids) == len(set(ids)) == len(OPERATION_TYPES)
+    assert {"audio.fade_in", "audio.fade_out"} <= set(ids) and "audio.fade" not in ids
+    (dep,) = live["dependencies"]
+    assert dep["skill_id"] == "ffmpeg-skill" and dep["version_range"] == ">=1.0 <2.0" and dep["range_of"] == "contract_version"
+    m = copy.deepcopy(live); m["provides"][1]["id"] = m["provides"][0]["id"]
+    assert any("not unique" in x for x in verify_implementation(m))
+
+
 def test_drift_classification():
     live = skill_contract()
     # breaking: a pinned block, an operation parameter, a removed operation, the version, a removed key anywhere

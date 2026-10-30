@@ -71,6 +71,9 @@ def verify_implementation(contract: Optional[Dict[str, Any]] = None, root: Optio
     for t, x in prov.items():
         if x.get("id") != CAPABILITY_IDS.get(t) or x.get("tool_id") != f"{SKILL_ID}/run" or x.get("lifecycle") not in ("PROPOSED", "EXPERIMENTAL", "STABLE", "DEPRECATED", "RETIRED"):
             p.append(f"provides[{t}] is malformed")
+    ids = [x.get("id") for x in prov.values()]
+    if len(ids) != len(set(ids)):
+        p.append("contract.provides ids are not unique (one Capability id per operation)")
     tools = c.get("tools") or []
     if len(tools) != 1 or tools[0].get("tool_id") != f"{SKILL_ID}/run" or sorted(tools[0].get("operations") or []) != sorted(OPERATION_TYPES):
         p.append("contract.tools must be the single audio-production/run ToolSpec listing every operation")

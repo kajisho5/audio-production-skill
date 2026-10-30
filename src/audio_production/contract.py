@@ -16,13 +16,14 @@ CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
 
 # Cross-repository Capability ids (kajisho5/AI-video-production-OS docs/SPEC.md
 # `CapabilityContract.provides`), matching the ids already assigned to this Skill's
-# operations in that project's own docs/CAPABILITY_MATRIX.md. FADE_IN and FADE_OUT are
-# both directions of the one `audio.fade` capability; every other operation type maps
-# 1:1. All fourteen always write a validated audio artifact through the single
-# `{SKILL_ID}/run` tool, so none is excluded the way `thumbnail/validate` is elsewhere.
+# operations in that project's own docs/CAPABILITY_MATRIX.md. Every operation type maps
+# 1:1 to its own id (FADE_IN / FADE_OUT are `audio.fade_in` / `audio.fade_out`: a
+# registry keys capabilities by id, so one id per entry). All fourteen always write a
+# validated audio artifact through the single `{SKILL_ID}/run` tool, so none is excluded
+# the way `thumbnail/validate` is elsewhere.
 CAPABILITY_IDS: Dict[str, str] = {
     "GAIN": "audio.gain", "TRIM": "audio.trim", "CUT": "audio.cut", "SILENCE_REMOVE": "audio.silence_remove",
-    "FADE_IN": "audio.fade", "FADE_OUT": "audio.fade", "NORMALIZE": "audio.normalize", "MIX": "audio.mix",
+    "FADE_IN": "audio.fade_in", "FADE_OUT": "audio.fade_out", "NORMALIZE": "audio.normalize", "MIX": "audio.mix",
     "MONO": "audio.mono", "STEREO": "audio.stereo", "DOWNMIX": "audio.downmix", "NOISE_REDUCTION": "audio.noise_reduction",
     "DYNAMICS": "audio.dynamics", "CONCAT": "audio.concat",
 }
@@ -31,6 +32,16 @@ CAPABILITY_IDS: Dict[str, str] = {
 def capability_provides() -> List[Dict[str, str]]:
     return [{"id": CAPABILITY_IDS[typ], "lifecycle": "EXPERIMENTAL", "tool_id": f"{SKILL_ID}/run", "operation": typ}
             for typ in sorted(OPERATION_TYPES)]
+
+
+# The AI Video Production OS registry's `dependencies`: ffmpeg-skill, as a range of its contract_version (the one
+# version this adapter reads; ADR-15: what is actually needed is checked flag by flag, not by package version).
+FFMPEG_SKILL_CONTRACT_RANGE = f">={SUPPORTED_CONTRACT_VERSION} <{int(SUPPORTED_CONTRACT_VERSION.split('.')[0]) + 1}.0"
+
+
+def dependencies() -> List[Dict[str, Any]]:
+    return [{"skill_id": "ffmpeg-skill", "version_range": FFMPEG_SKILL_CONTRACT_RANGE, "range_of": "contract_version", "required": True,
+             "tools": [f"ffmpeg-skill/{t}" for t in TOOLS_USED]}]
 
 
 def _param_schema(ps: Dict[str, Any]) -> Dict[str, Any]:
@@ -78,6 +89,7 @@ def skill_contract() -> Dict[str, Any]:
                          "video editing", "arbitrary ffmpeg filters", "shell execution", "network access"],
         "tools": tools,
         "provides": capability_provides(),
+        "dependencies": dependencies(),
         "operations": operation_specs(),
         "unsupported_operations": [{"type": t, "status": "not_implemented", "reason": r} for t, r in UNSUPPORTED_OPERATIONS.items()],
         "output_formats": {f: {"extension": s["extension"], "codec": s["codec"], "required_capability": s["capability"], "lossless": s["lossless"]} for f, s in OUTPUT_FORMATS.items()},
