@@ -13,8 +13,9 @@
 
 Which ffmpeg-skill tools are used, and for what (docs/ffmpeg-skill.md):
   probe     input facts and output validation
-  audio     GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS (each takes --audio-stream N,
-            since ffmpeg-skill 0.9.1, to pick which audio stream of their one input to process; default 0), MIX
+  audio     GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP (each takes --audio-stream N,
+            since ffmpeg-skill 0.9.1, to pick which audio stream of their one input to process; default 0; VOICE_CLEANUP's
+            level is passed as `--voice <level>` when the contract declares the levels, else as the bare `--voice`), MIX
             (--music, always stream 0 of each already-resolved input), format conversion / extraction
   cut       TRIM (--start/--end), CUT / SILENCE_REMOVE (--segments = kept ranges), always --accurate (sample precision)
   loudness  NORMALIZE (-I/--tp/--lra/--sample-rate); verification reads the `result` field of that same call's
@@ -47,7 +48,7 @@ TOOLS_USED = ("probe", "audio", "cut", "loudness", "join")
 # flags of the ffmpeg-skill input_schema this adapter emits; checked against the live contract in doctor
 FLAGS_USED: Dict[str, Tuple[str, ...]] = {
     "probe": ("inputs",),
-    "audio": ("input", "output", "gain", "fade_in", "fade_out", "mono", "stereo", "downmix", "denoise", "denoise_strength", "music", "music_volume", "json",
+    "audio": ("input", "output", "gain", "fade_in", "fade_out", "mono", "stereo", "downmix", "denoise", "denoise_strength", "voice", "music", "music_volume", "json",
               "compress", "comp_threshold", "comp_ratio", "comp_attack", "comp_release", "comp_makeup", "comp_knee",
               "limit", "limit_ceiling", "limit_attack", "limit_release",
               "gate", "gate_threshold", "gate_ratio", "gate_attack", "gate_release", "gate_range", "gate_knee",
@@ -140,6 +141,22 @@ class SkillInfo:
         spec = self.tools.get(tool) or {}
         props = (spec.get("input_schema") or {}).get("properties") or {}
         return isinstance(props, dict) and flag in props
+
+    def flag_choices(self, tool: str, flag: str) -> Optional[List[str]]:
+        """The values `flag` accepts according to the located contract's input_schema `enum`, or None when the flag is
+        not declared with an enum (a boolean switch, or not declared at all)."""
+        spec = self.tools.get(tool) or {}
+        prop = ((spec.get("input_schema") or {}).get("properties") or {}).get(flag)
+        enum = prop.get("enum") if isinstance(prop, dict) else None
+        return [str(v) for v in enum] if isinstance(enum, list) else None
+
+    def voice_levels(self) -> List[str]:
+        """VOICE_CLEANUP levels this checkout can run: the `--voice` enum (ffmpeg-skill >= 1.13), or only `medium` when
+        `--voice` is the older boolean switch, whose one chain is the medium chain (ADR-16); [] without the flag."""
+        choices = self.flag_choices("audio", "voice")
+        if choices is not None:
+            return choices
+        return ["medium"] if self.takes_flag("audio", "voice") else []
 
     def optional_flags(self) -> Dict[str, Dict[str, bool]]:
         """OPTIONAL_FLAGS_USED -> detected (True / False) on this checkout; what doctor reports."""

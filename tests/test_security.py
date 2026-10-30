@@ -225,7 +225,7 @@ def test_audio_stream_threads_into_argv_only_for_single_input_audio_ops(workspac
     audio_ops = {
         "GAIN": {"gain_db": -3}, "FADE_IN": {"duration": 0.5}, "FADE_OUT": {"duration": 0.5},
         "MONO": {}, "STEREO": {}, "DOWNMIX": {}, "NOISE_REDUCTION": {"mode": "fft", "strength_db": 20},
-        "DYNAMICS": {"limiter": {"ceiling_db": -1}},
+        "DYNAMICS": {"limiter": {"ceiling_db": -1}}, "VOICE_CLEANUP": {"level": "medium"},
     }
     for typ, base_params in audio_ops.items():
         tool, argv = argv_for(typ, dict(base_params))                # audio_stream omitted -> default flows through as 0

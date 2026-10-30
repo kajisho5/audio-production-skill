@@ -84,6 +84,15 @@ DYNAMICS_STAGES: Dict[str, Dict[str, Dict[str, Any]]] = {
 # those ffmpeg-skill tools deliberately have no --audio-stream flag (0.12.0 CHANGELOG: combining separate files is
 # "a different problem shape"); MIX does not either, for the same reason (it folds multiple already-resolved inputs
 # through --music, which only ever reads stream 0 of each bed file, not the flag's own --audio-stream semantics).
+# VOICE_CLEANUP levels: the fixed speech chains of ffmpeg-skill/audio --voice (light | medium | strong; the bare flag
+# of releases before 1.13 is the medium chain). Nothing in them is tunable through ffmpeg-skill, so nothing is here:
+#   light   highpass 80 Hz -> acompressor (threshold -18 dB, ratio 2)
+#   medium  highpass 80 Hz -> deesser -> afftdn (fixed noise floor -25 dB) -> acompressor (threshold -18 dB, ratio 3)
+#   strong  medium -> harder deesser -> second acompressor (threshold -24 dB, ratio 4) -> alimiter at -1 dBFS
+# The afftdn noise floor is fixed at -25 dB inside ffmpeg-skill (within afftdn's valid nf range -80..-20), so this
+# operation can never produce the out-of-range nf that a --denoise-strength below 20 would (ADR-16).
+VOICE_LEVELS = ("light", "medium", "strong")
+
 AUDIO_STREAM_PARAM: Dict[str, Any] = {"type": _INT, "required": False, "min": 0, "default": 0,
                                        "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; "
                                                        "probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"}
@@ -128,6 +137,13 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
         "compressor": {"type": _STAGE, "required": False, "stage": "compressor", "description": "acompressor parameters (omitted fields keep ffmpeg's defaults, recorded by ffmpeg-skill)"},
         "limiter": {"type": _STAGE, "required": False, "stage": "limiter", "description": "alimiter parameters"},
         "gate": {"type": _STAGE, "required": False, "stage": "gate", "description": "agate parameters"},
+        "audio_stream": AUDIO_STREAM_PARAM}},
+    "VOICE_CLEANUP": {"description": "Speech clean-up preset (ffmpeg-skill/audio --voice): a fixed filter chain per level, nothing tuned here", "inputs": (1, 1), "parameters": {
+        "level": {"type": _STR, "required": True, "enum": list(VOICE_LEVELS),
+                  "description": "light = highpass 80 Hz + gentle compression; medium = highpass, de-esser, FFT denoise (fixed -25 dB floor), compression; "
+                                 "strong = medium + harder de-esser, second compressor, limiter at -1 dBFS. No default: the caller decides. "
+                                 "light / strong need an ffmpeg-skill whose contract declares the --voice levels (older releases: medium only, "
+                                 "anything else is refused with TOOL_ERROR before a tool runs)"},
         "audio_stream": AUDIO_STREAM_PARAM}},
     "CONCAT": {"description": "Concatenate 2..32 inputs in order (ffmpeg concat), optional equal-power crossfade", "inputs": (2, MAX_CONCAT_INPUTS), "parameters": {
         "crossfade": {"type": _NUM, "required": False, "min": 0.0, "max": 30.0, "default": 0.0, "description": "seconds of acrossfade between clips (0 = butt join)"},

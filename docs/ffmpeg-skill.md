@@ -10,7 +10,7 @@ It never calls `ffmpeg` or `ffprobe` itself.
 | ffmpeg-skill tool | used for | flags emitted |
 |---|---|---|
 | `ffmpeg-skill/probe` | source facts, every output validation | positional input |
-| `ffmpeg-skill/audio` | GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, MIX, audio extraction from video, export | `--gain`, `--fade-in`, `--fade-out`, `--mono`, `--stereo`, `--downmix`, `--denoise`, `--denoise-strength`, `--music`, `--music-volume`, `--gate/--gate-*`, `--compress/--comp-*`, `--limit/--limit-*`, `-o`, `--json` |
+| `ffmpeg-skill/audio` | GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP, MIX, audio extraction from video, export | `--gain`, `--fade-in`, `--fade-out`, `--mono`, `--stereo`, `--downmix`, `--denoise`, `--denoise-strength`, `--voice [light\|medium\|strong]`, `--music`, `--music-volume`, `--gate/--gate-*`, `--compress/--comp-*`, `--limit/--limit-*`, `-o`, `--json` |
 | `ffmpeg-skill/cut` | TRIM, CUT, SILENCE_REMOVE | `--start`, `--end`, `--segments`, `--accurate`, `-o`, `--json` |
 | `ffmpeg-skill/loudness` | NORMALIZE, verified from that same call's `--json` `result` field | `-I`, `--tp`, `--lra`, `--sample-rate`, `-o`, `--json` |
 | `ffmpeg-skill/join` | CONCAT | positional inputs, `--transition none|fade`, `--duration`, `--sample-rate`, `--channels`, `-o`, `--json` |
@@ -26,6 +26,7 @@ reports each under `checks.ffmpeg_skill.optional_flags`:
 | flag | declared by | used for | without it |
 |---|---|---|---|
 | `audio --overwrite` | ffmpeg-skill >= 1.10 (which refuses to replace an existing output without it) | export to an existing path when the request set `overwrite: true` | not passed; older releases replace the file anyway and reject the flag |
+| `audio --voice <level>` (value form) | ffmpeg-skill >= 1.13 (`voice` declared as a string with `enum` light / medium / strong) | VOICE_CLEANUP `level` passed as `--voice <level>` | `voice` is a boolean switch (0.12.2 … 1.12): only `level: medium` runs, as the bare `--voice` — the same chain byte for byte; `light` / `strong` are refused at planning with `TOOL_ERROR` `voice_level_unsupported` (ADR-16). `doctor` reports `checks.ffmpeg_skill.voice_levels` |
 | `loudness --measure-only` | every release this skill can run | NORMALIZE verification when the call's `--json` has no `result` (before 0.12.0); the measurement is read from the document's top level, `result` or `measured` (2.x) | `TOOL_ERROR` `loudness_result_missing` if `result` is also absent |
 
 ffmpeg-skill 2.0's other breaking changes do not reach this skill: it emits no `--crf` (renamed `--quality`), imports
@@ -95,3 +96,22 @@ Audio stream selection is no longer a gap: `--audio-stream` has existed on `audi
 tools deliberately exclude `--audio-stream` (0.12.0 CHANGELOG: combining separate files is "a different problem
 shape"). `MIX` also always uses stream 0 of each input, for the same reason — it folds already-resolved inputs
 through `--music`, which reads stream 0 of the bed file regardless of `--audio-stream` on the main input.
+
+## `--voice` (VOICE_CLEANUP), measured 2026-10-30
+
+Read from `scripts/audio.py` and `_contract.py --json --static` at 0.12.2 (`336e0c4`) and 2.21.0:
+
+| level | chain (`VOICE_LEVELS` in audio.py) | 0.12.2 | 2.21.0 |
+|---|---|---|---|
+| light | `highpass=f=80,acompressor=threshold=-18dB:ratio=2:attack=5:release=80:makeup=1` | – | yes |
+| medium | `highpass=f=80,deesser=i=0.4,afftdn=nf=-25:tn=1,acompressor=threshold=-18dB:ratio=3:attack=5:release=80:makeup=2` | bare `--voice` | yes |
+| strong | medium + `deesser=i=0.6,acompressor=threshold=-24dB:ratio=4:attack=5:release=120:makeup=3,alimiter=limit=0.891251:level=disabled` | – | yes |
+
+- The chains take no parameters: `--voice` has no strength, threshold or frequency flag, so VOICE_CLEANUP has only
+  `level` (and `audio_stream`).
+- Under `--voice`, `--denoise` / `--denoise-strength` are ignored (`elif` in audio.py); VOICE_CLEANUP never emits them.
+- afftdn's `nf` is only valid in [−80, −20] dB (FFmpeg 6.1 refuses `nf=-15` with "Numerical result out of range").
+  The voice chains use a fixed `nf=-25`, so VOICE_CLEANUP cannot hit that limit; the integration test asserts every
+  observed `afftdn=nf=` value lies in range. `--denoise-strength` maps to `nf=-<strength>` and ffmpeg-skill accepts
+  10..60, so a NOISE_REDUCTION `strength_db` below 20 reaches ffmpeg out of range — a separate gap of that operation
+  (docs/STATE.md).

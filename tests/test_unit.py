@@ -103,6 +103,13 @@ def test_parameter_validation_per_type():
     err(v, "INVALID_REQUEST", "DYNAMICS", {"compressor": {"ratio": 0.5}}, 1, "p")             # range
     err(v, "INVALID_REQUEST", "DYNAMICS", {"gate": {"threshold_db": -20, "hold_ms": 5}}, 1, "p")   # unknown field
     err(v, "INVALID_REQUEST", "DYNAMICS", {"compressor": "fast"}, 1, "p")
+    assert v("VOICE_CLEANUP", {"level": "strong"}, 1, "p") == {"level": "strong", "audio_stream": 0}
+    err(v, "INVALID_REQUEST", "VOICE_CLEANUP", {}, 1, "p")                                    # level required, no default
+    err(v, "INVALID_REQUEST", "VOICE_CLEANUP", None, 1, "p")
+    err(v, "UNSUPPORTED_OPERATION", "VOICE_CLEANUP", {"level": "extreme"}, 1, "p")            # not one of the ffmpeg-skill levels
+    err(v, "INVALID_REQUEST", "VOICE_CLEANUP", {"level": True}, 1, "p")                       # the 1.12 boolean is not a level
+    err(v, "INVALID_REQUEST", "VOICE_CLEANUP", {"level": "medium", "strength_db": 30}, 1, "p")   # no tunable denoise strength
+    err(v, "INVALID_REQUEST", "VOICE_CLEANUP", {"level": "medium", "audio_stream": -1}, 1, "p")
     c = v("CONCAT", {"crossfade": 0.5, "channels": 2}, 3, "p")
     assert c == {"crossfade": 0.5, "channels": 2}
     assert v("CONCAT", None, 2, "p") == {"crossfade": 0.0}
@@ -235,6 +242,7 @@ def test_identity_is_sensitive_to_audio_stream():
         ("MONO", {}),
         ("NOISE_REDUCTION", {"mode": "fft", "strength_db": 20}),
         ("DYNAMICS", {"limiter": {"ceiling_db": -1}}),
+        ("VOICE_CLEANUP", {"level": "medium"}),
     ):
         default_id = ids_for(typ, params)                                          # audio_stream omitted -> default 0
         explicit_zero_id = ids_for(typ, {**params, "audio_stream": 0})
@@ -247,6 +255,17 @@ def test_identity_is_sensitive_to_audio_stream():
     for typ in ("STEREO", "DOWNMIX"):
         assert validate_parameters(typ, {}, 1, "p")["audio_stream"] == 0
         assert validate_parameters(typ, {"audio_stream": 3}, 1, "p")["audio_stream"] == 3
+
+
+def test_identity_is_sensitive_to_voice_level():
+    base, versions = {"a": "f" * 64}, {"ffmpeg-skill": "2.21.0"}
+
+    def ident(level):
+        ops = [{"op_id": "x", "type": "VOICE_CLEANUP", "inputs": ["track:t1"], "parameters": {"level": level}}]
+        return OperationGraph(parse_request(request_doc(ops)).project).identities(base, versions)["op:x"]
+
+    assert len({ident(level) for level in ("light", "medium", "strong")}) == 3
+    assert ident("medium") == ident("medium")
 
 
 def test_canonical_json_is_stable():

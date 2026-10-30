@@ -79,7 +79,7 @@ def doctor_report(ffmpeg_skill_dir: Optional[str] = None, workspace: Optional[st
         checks["ffmpeg_skill"] = {"status": "ok" if info.supported else "fail", "directory": str(info.directory), "version": info.version,
                                   "contract_version": info.contract_version, "tools_used": list(sorted(t for t in info.tools if t in TOOLS_USED)),
                                   "compatibility": "capability detection: required tools and flags read from this checkout's contract; no version window",
-                                  "optional_flags": info.optional_flags(), "problems": info.problems, "warnings": info.warnings}
+                                  "optional_flags": info.optional_flags(), "voice_levels": info.voice_levels(), "problems": info.problems, "warnings": info.warnings}
         problems += ["ffmpeg-skill: " + p for p in info.problems]
         ffdoc = ffmpeg_skill_doctor(skill)
         checks["ffmpeg"] = {"status": "ok" if ffdoc.get("ffmpeg") else "missing", "version": ffdoc.get("ffmpeg"), "detected_by": "ffmpeg-skill doctor"}
