@@ -123,7 +123,7 @@ against `tests/contract/contract.json`; regenerate that file when a contract cha
 the versioning rules: [docs/contract.md](docs/contract.md).
 
 `provides` lists this Skill's fourteen operations by their cross-repository Capability id (`audio.gain`,
-`audio.trim`, `audio.cut`, `audio.silence_remove`, `audio.fade` for both `FADE_IN`/`FADE_OUT`, `audio.normalize`,
+`audio.trim`, `audio.cut`, `audio.silence_remove`, `audio.fade_in`, `audio.fade_out`, `audio.normalize`,
 `audio.mix`, `audio.mono`, `audio.stereo`, `audio.downmix`, `audio.noise_reduction`, `audio.dynamics`,
 `audio.concat`), each with the `operation` it maps to, its `tool_id` (always `audio-production/run`, since this
 Skill exposes one execution tool), and a `lifecycle`. This is a different vocabulary from the "Capabilities" above
@@ -133,6 +133,10 @@ is for `kajisho5/AI-video-production-OS`'s `CapabilityContract.provides` (see th
 repository. It is additive and derived from `model.OPERATION_TYPES`; see ADR-10. Status: EXPERIMENTAL — the OS
 specification it follows lives on that repository's `main` (`docs/SPEC.md`, `docs/CAPABILITY_MATRIX.md`); the ids
 are kept in sync with `docs/CAPABILITY_MATRIX.md` there.
+
+`dependencies` names the one Skill this one calls, in the OS registry's shape: `ffmpeg-skill` with a
+`version_range` of its `contract_version` (`>=1.0 <2.0`, `range_of: "contract_version"`) and the ffmpeg-skill tools
+used. It is a declaration for the registry; compatibility is still decided flag by flag (ADR-15).
 
 ### Input schema (`audio-production/request@1`)
 
