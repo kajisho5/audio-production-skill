@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.1 - 2026-10-30
+
+- Add ECOSYSTEM_ROADMAP.md: gaps, wiring and PR-sized steps from the 2026-10-30 ecosystem audit (#20) (134ec45)
+
 ## v0.4.0 - 2026-10-23
 
 - ci(release): push the tag, read resolved_version, use release-drafter v7 dry-run (#19) (75fb3e1)
