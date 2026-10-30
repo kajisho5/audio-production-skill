@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.4 - 2026-10-30
+
+- ci: pin third-party actions by commit SHA (#23) (fe00ce7)
+
 ## v0.4.3 - 2026-10-30
 
 - feat: VOICE_CLEANUP operation (typed ffmpeg-skill/audio --voice) (#22) (88526df)
