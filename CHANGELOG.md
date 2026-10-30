@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.3 - 2026-10-30
+
+- feat: VOICE_CLEANUP operation (typed ffmpeg-skill/audio --voice) (#22) (88526df)
+
 ## v0.4.2 - 2026-10-30
 
 - fix: distinct fade capability ids and ffmpeg-skill dependency in the contract (#21) (0159066)
