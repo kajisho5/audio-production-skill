@@ -16,7 +16,7 @@ v0.4.0, Python 3.9+ stdlib. 14 operations (GAIN, TRIM, CUT, SILENCE_REMOVE, FADE
 | 音量・ラウドネス | done |  |
 | ミックス | partial | MIX has no pan, no ducking; ffmpeg-skill/audio --duck/--effects not exposed |
 | ダイナミクス | done |  |
-| 従来型ノイズ低減 | done | afftdn; ffmpeg-skill/audio --voice preset not exposed |
+| 従来型ノイズ低減 | done | afftdn (NOISE_REDUCTION); ffmpeg-skill/audio --voice presets as VOICE_CLEANUP |
 | 無音・フィラー除去 | partial | silence removal for caller-given ranges; filler removal missing everywhere |
 
 ## Wiring
@@ -29,7 +29,7 @@ Agent plans 9 ops; MIX, SILENCE_REMOVE, NOISE_REDUCTION, DYNAMICS are executable
   - Done when: OS dependency_version_ranges PASS
 - [ ] **2. MIX ducking / effects** — typed duck and effects params -> ffmpeg-skill/audio
   - Done when: music bed lower under speech (integration)
-- [ ] **3. VOICE_CLEANUP op** — typed wrapper of ffmpeg-skill/audio --voice
+- [x] **3. VOICE_CLEANUP op** — typed wrapper of ffmpeg-skill/audio --voice ([#22](https://github.com/kajisho5/audio-production-skill/pull/22))
   - Done when: contract + unit tests
 - [ ] **4. FILLER_REMOVE op** — caller-supplied word ranges (from transcript word timestamps); the skill cuts, never decides
   - Done when: sample-accurate fixture
