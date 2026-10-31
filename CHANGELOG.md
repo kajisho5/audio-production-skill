@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.8 - 2026-10-31
+
+- fix: accept ffmpeg-skill 3.0.0 (contract_version 2.0); Python 3.9 CI on the last 2.x (#27) (b1ac5cd)
+
 ## v0.4.7 - 2026-10-31
 
 - Tick roadmap step 5 (agent side done in video-production-agent #81 / #87) (#26) (78032ae)
