@@ -35,7 +35,7 @@ Agent plans 9 ops; MIX, SILENCE_REMOVE, NOISE_REDUCTION, DYNAMICS are executable
   - Done when: sample-accurate fixture
 - [x] **5. (agent side) plan MIX / NR / DYNAMICS / FILLER_REMOVE** — from explicit requirements (video-production-agent [#81](https://github.com/kajisho5/video-production-agent/pull/81) MIX / NOISE_REDUCTION / DYNAMICS, [#87](https://github.com/kajisho5/video-production-agent/pull/87) FILLER_REMOVE / MIX.duck)
   - Done when: tracked in video-production-agent
-- [x] **6. ffmpeg-skill 3.0.0** — accept its contract_version 2.0; Python 3.9 CI against the last 2.x (ADR-21) ([#PRNUM](https://github.com/kajisho5/audio-production-skill/pull/PRNUM))
+- [x] **6. ffmpeg-skill 3.0.0** — accept its contract_version 2.0; Python 3.9 CI against the last 2.x (ADR-21) ([#27](https://github.com/kajisho5/audio-production-skill/pull/27))
   - Done when: CI passes against 3.0.0 and the range includes it
 
 ## Boundaries
