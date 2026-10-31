@@ -5,15 +5,16 @@ Read this first; do not rely on conversation history. Current state and next tas
 ## What this repository is
 
 A deterministic **audio production execution Skill** of the kajisho5 video production ecosystem (README "What it is,
-and what it is not"). It executes a typed operation graph (GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN/OUT, NORMALIZE,
-MIX, CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP) through **ffmpeg-skill**'s public contract (any version that declares the tools and flags it uses)
+and what it is not"). It executes a typed operation graph (GAIN, TRIM, CUT, SILENCE_REMOVE, FILLER_REMOVE, FADE_IN/OUT, NORMALIZE,
+MIX (with duck), CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP) through **ffmpeg-skill**'s public contract (any version that declares the tools and flags it uses)
 and reports validated artifacts with provenance. It is not an agent, not a measurement skill, not ffmpeg-skill.
 
 ## Boundaries that must hold
 
 - No shell, no `ffmpeg` call of its own, no filter strings, no request field may name a command / argv / executable
   (`model.FORBIDDEN_KEYS`); one `subprocess.Popen` in `adapter.py`; allow-listed ffmpeg-skill scripts only.
-- No production defaults (`target_lufs`, `true_peak_db`, silence ranges are always explicit), no silence detection,
+- No production defaults (`target_lufs`, `true_peak_db`, silence ranges, the filler lexicon are always explicit), no
+  silence detection, no speech recognition (FILLER_REMOVE cuts at caller-supplied word timings),
   no decisions, no conference / speaker vocabulary in code or contract (tested).
 - Inputs are never modified; outputs stay inside `--workspace`; failed runs leave no partial output.
 - Everything the contract says is derived from `model.OPERATION_TYPES`, `executor.TOOL_FOR`, `adapter.FLAGS_USED`,
@@ -21,7 +22,8 @@ and reports validated artifacts with provenance. It is not an agent, not a measu
 
 ## Layout
 
-`src/audio_production/`: `model` (request schema, operation parameter schemas), `security` (path policy), `graph`,
+`src/audio_production/`: `model` (request schema, operation parameter schemas), `fillers` (FILLER_REMOVE matching /
+range arithmetic, pure), `security` (path policy), `graph`,
 `timeline`, `adapter` (ffmpeg-skill boundary), `executor`, `doctor`, `contract`, `contract_check`, `cli`, `errors`,
 `canonical`. `tests/`: unit, security, contract (with `tests/contract/contract.json` pinned), integration (real
 audio through the real ffmpeg-skill; nothing skipped). `docs/`: architecture, security, ffmpeg-skill (observed

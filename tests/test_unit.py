@@ -384,3 +384,90 @@ def test_partial_output_removal_waits_until_the_file_is_deletable(tmp_path, monk
     assert not target.exists() and calls["n"] == 4
     Executor._remove_partial(target)                            # already gone: returns at once
     assert calls["n"] == 4
+
+
+# ---- FILLER_REMOVE (ADR-18): word timings + an explicit lexicon -> removal ranges, pure arithmetic
+def _w(start, end, text):
+    return {"start": start, "end": end, "text": text}
+
+
+def test_filler_normalisation_and_presets():
+    from audio_production.fillers import LEXICON_PRESETS, effective_lexicon, normalise
+    assert normalise("えーー、") == normalise("えー") == normalise("え〜") == "えー"
+    assert normalise(" Um, ") == normalise("UM") == "um" and normalise("ｴｰ") == normalise("エー")
+    assert normalise("...") == ""
+    assert set(LEXICON_PRESETS) == {"ja", "en"}
+    for ambiguous in ("あの", "その", "まあ", "なんか", "like"):          # ordinary words in running speech are never preset fillers
+        assert normalise(ambiguous) not in effective_lexicon(["ja", "en"], [], [])
+    lex = effective_lexicon(["ja"], ["あの"], ["えっと"])
+    assert "あの" in lex and "えっと" not in lex and "えー" in lex and "um" not in lex
+
+
+def test_filler_matching_runs_pad_and_merge():
+    from audio_production.fillers import effective_lexicon, match_fillers, removal_ranges
+    lex = effective_lexicon(["ja", "en"], [], [])
+    words = [_w(0.0, 0.8, "本日は"), _w(0.9, 1.1, "えー"), _w(1.1, 1.3, "と"), _w(1.6, 2.0, "症例"), _w(2.4, 2.6, "uh"), _w(2.7, 2.9, "Um,"), _w(3.0, 4.0, "です")]
+    runs = match_fillers(words, lex)
+    assert runs == [(1, 3), (4, 5), (5, 6)]                             # "えー" + "と" is one run ("えーと"): the longest run wins
+    assert removal_ranges(words, runs, 0.0, 0.0, 4.0) == [(0.9, 1.3), (2.4, 2.6), (2.7, 2.9)]
+    # pad grows each side but never into a neighbouring word; merge_gap joins fillers with no word between them
+    # (padded ranges that meet -- "uh" and "Um," padded towards each other -- become one range)
+    assert removal_ranges(words, runs, 0.2, 0.0, 4.0) == [(0.8, 1.5), (2.2, 3.0)]
+    assert removal_ranges(words, runs, 0.0, 0.1, 4.0) == [(0.9, 1.3), (2.4, 2.9)]
+    assert removal_ranges(words, runs, 0.0, 2.0, 4.0)[0] == (0.9, 1.3)  # a real word ("症例") between: never merged
+    # touching tokens only: a separate "えー" and "と" a second apart are two words, "と" is kept
+    apart = [_w(0.0, 0.2, "えー"), _w(1.2, 1.4, "と")]
+    assert match_fillers(apart, lex) == [(0, 1)]
+    # clipped to the input: a filler running past the end is cut at the end; at the start, never below 0
+    assert removal_ranges([_w(0.0, 0.3, "um"), _w(0.3, 5.2, "end")], [(0, 1)], 0.5, 0.0, 5.0) == [(0.0, 0.3)]
+    assert removal_ranges([_w(1.0, 2.0, "x"), _w(4.8, 5.4, "um")], [(1, 2)], 0.1, 0.0, 5.0) == [(4.7, 5.0)]
+
+
+def test_filler_remove_parameters():
+    v = validate_parameters
+    words = [_w(0.0, 1.0, "本日は"), _w(1.0, 1.5, "えー")]
+    out = v("FILLER_REMOVE", {"words": list(reversed(words)), "lexicon": {"presets": ["ja"], "words": ["あの", "あの"]}}, 1, "p")
+    assert out == {"words": [{**w, "start": float(w["start"]), "end": float(w["end"])} for w in words], "lexicon": {"presets": ["ja"], "words": ["あの"], "keep": []},
+                   "pad": 0.0, "merge_gap": 0.0}                       # sorted by time, lexicon de-duplicated, no declick unless asked
+    e = err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"lexicon": {"presets": ["ja"]}}, 1, "p")
+    assert e.details["reason"] == "word_timestamps_missing"           # no ASR here: timings are required
+    e = err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": [{"text": "えー"}], "lexicon": {"presets": ["ja"]}}, 1, "p")
+    assert e.details["reason"] == "word_timestamps_missing"
+    e = err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": [{"start": None, "end": None, "text": "えー"}], "lexicon": {"presets": ["ja"]}}, 1, "p")
+    assert e.details["reason"] == "word_timestamps_missing"
+    err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": words}, 1, "p")                               # lexicon required, no default
+    err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": words, "lexicon": {}}, 1, "p")                # empty lexicon
+    err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": words, "lexicon": {"presets": ["ja"], "keep": list(__import__("audio_production.fillers", fromlist=["x"]).LEXICON_PRESETS["ja"])}}, 1, "p")
+    err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": words, "lexicon": {"presets": ["fr"]}}, 1, "p")
+    err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": words, "lexicon": {"presets": ["ja"]}, "pad": 0.6}, 1, "p")
+    err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": words, "lexicon": {"presets": ["ja"]}, "declick_ms": -1}, 1, "p")
+    err(v, "INVALID_TIME_RANGE", "FILLER_REMOVE", {"words": [_w(2.0, 1.0, "えー")], "lexicon": {"presets": ["ja"]}}, 1, "p")
+    err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": [{**words[0], "speaker_id": "x"}], "lexicon": {"presets": ["ja"]}}, 1, "p")
+    # a transcription-skill transcript: its segments' words are read; a segment without word timestamps is refused
+    tr = {"schema": "transcription-skill/transcript/0.1", "id": "tr_1", "asset_id": "asset_1", "language": "ja", "duration": 6.0,
+          "segments": [{"id": "seg_0001", "start": 0.0, "end": 1.5, "text": "本日はえー", "words": [{**w, "confidence": 0.9} for w in words], "speaker_id": None}]}
+    out = v("FILLER_REMOVE", {"transcript": tr, "lexicon": {"presets": ["ja"]}}, 1, "p")
+    assert [w["text"] for w in out["words"]] == ["本日は", "えー"] and out["words"][0]["confidence"] == 0.9
+    assert out["transcript"] == {"schema": "transcription-skill/transcript/0.1", "id": "tr_1", "asset_id": "asset_1", "language": "ja"}
+    tr2 = {**tr, "segments": tr["segments"] + [{"id": "seg_0002", "start": 2.0, "end": 3.0, "text": "x", "words": None, "speaker_id": None}]}
+    e = err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"transcript": tr2, "lexicon": {"presets": ["ja"]}}, 1, "p")
+    assert e.details["reason"] == "word_timestamps_missing" and e.details["segments"] == ["seg_0002"]
+    err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"transcript": {**tr, "schema": "other/1"}, "lexicon": {"presets": ["ja"]}}, 1, "p")
+    e = err(v, "INVALID_REQUEST", "FILLER_REMOVE", {"words": words, "transcript": tr, "lexicon": {"presets": ["ja"]}}, 1, "p")
+    assert e.details["reason"] == "ambiguous_word_source"
+
+
+def test_mix_duck_parameters():
+    v = validate_parameters
+    m = v("MIX", {"duck": {"input": 1, "amount_db": 12}}, 2, "p")
+    assert m["duck"] == {"input": 1, "amount_db": 12.0} and m["levels"] == [{"gain_db": 0.0, "mute": False}] * 2
+    m = v("MIX", {"duck": {"input": 2, "amount_db": 20, "threshold_db": -30, "attack_ms": 5, "release_ms": 300}}, 3, "p")
+    assert m["duck"] == {"input": 2, "amount_db": 20.0, "threshold_db": -30.0, "attack_ms": 5.0, "release_ms": 300.0}
+    err(v, "INVALID_REQUEST", "MIX", {"duck": {"input": 1}}, 2, "p")                                  # amount required, no default
+    err(v, "INVALID_REQUEST", "MIX", {"duck": {"input": 0, "amount_db": 12}}, 2, "p")                 # input 0 is the key
+    err(v, "INVALID_REQUEST", "MIX", {"duck": {"input": 2, "amount_db": 12}}, 2, "p")                 # no such input
+    err(v, "INVALID_REQUEST", "MIX", {"duck": {"input": 1.5, "amount_db": 12}}, 2, "p")
+    err(v, "INVALID_REQUEST", "MIX", {"duck": {"input": 1, "amount_db": 61}}, 2, "p")                 # sidechaincompress range
+    err(v, "INVALID_REQUEST", "MIX", {"duck": {"input": 1, "amount_db": 12, "ratio": 4}}, 2, "p")     # unknown field
+    err(v, "INVALID_REQUEST", "MIX", {"duck": {"input": 1, "amount_db": 12}, "levels": [{"mute": True}, {}]}, 2, "p")
+    err(v, "INVALID_REQUEST", "MIX", {"duck": {"input": 1, "amount_db": 12}, "levels": [{}, {"mute": True}]}, 2, "p")

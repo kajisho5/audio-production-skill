@@ -12,6 +12,10 @@ ffmpeg directly; the skill under test never does. Every fixture has a known cons
                   selects between them): stream 0 a quiet 300 Hz tone (amplitude 0.05, measured mean_volume -29 dB),
                   stream 1 a loud 900 Hz tone (amplitude 0.5, measured mean_volume -9 dB) -- a 20 dB / distinct-tone
                   difference objective enough that picking the wrong stream cannot be mistaken for picking the right one
+  fillers.wav  6 s mono PCM 48 kHz, 1 kHz sine: amplitude 0.1 ("words") except 1.0-1.5 s and 3.0-3.4 s, where it is 0.5
+               ("fillers", 14 dB louder): removing exactly those ranges leaves 5.1 s = 244800 samples peaking at -20 dBFS
+  keyed.wav    6 s mono PCM 48 kHz, loud 1 kHz sine (amplitude 0.5) only between 2..5 s: the key a bed ducks under
+  bed.wav      6 s mono PCM 48 kHz, steady 440 Hz sine amplitude 0.1: a bed whose level is measured around 440 Hz
   text.txt     not media"""
 from __future__ import annotations
 
@@ -23,6 +27,8 @@ from typing import Dict
 FF = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-nostdin"]
 TONE = "0.1*sin(2*PI*1000*t)"
 TONE_GATED = "0.1*sin(2*PI*1000*t)*between(t\\,2\\,5)"
+TONE_FILLERS = "(0.1+0.4*(between(t\\,1\\,1.5)+between(t\\,3\\,3.4)))*sin(2*PI*1000*t)"
+TONE_KEYED = "0.5*sin(2*PI*1000*t)*between(t\\,2\\,5)"
 
 
 def available() -> bool:
@@ -37,7 +43,8 @@ def build_all(directory: Path) -> Dict[str, Path]:
     d = Path(directory)
     d.mkdir(parents=True, exist_ok=True)
     f = {k: d / v for k, v in {"tone": "tone.wav", "stereo": "stereo.m4a", "gated": "gated.wav", "surround": "surround.wav", "silence": "silence.wav",
-                               "video": "video.mp4", "noaudio": "noaudio.mp4", "multitrack": "multitrack.mka", "text": "text.txt"}.items()}
+                               "video": "video.mp4", "noaudio": "noaudio.mp4", "multitrack": "multitrack.mka", "fillers": "fillers.wav",
+                               "keyed": "keyed.wav", "bed": "bed.wav", "text": "text.txt"}.items()}
     _run(["-f", "lavfi", "-i", f"aevalsrc='{TONE}':s=48000:c=mono", "-t", "6", "-c:a", "pcm_s16le", str(f["tone"])])
     _run(["-f", "lavfi", "-i", "aevalsrc='0.1*sin(2*PI*440*t)|0.1*sin(2*PI*440*t)':s=48000:c=stereo", "-t", "4", "-c:a", "aac", str(f["stereo"])])
     _run(["-f", "lavfi", "-i", f"aevalsrc='{TONE_GATED}':s=48000:c=mono", "-t", "6", "-c:a", "pcm_s16le", str(f["gated"])])
@@ -49,5 +56,7 @@ def build_all(directory: Path) -> Dict[str, Path]:
     _run(["-f", "lavfi", "-i", "testsrc2=size=160x90:rate=25", "-t", "2", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", str(f["noaudio"])])
     _run(["-f", "lavfi", "-i", "aevalsrc='0.05*sin(2*PI*300*t)':s=48000:c=mono", "-f", "lavfi", "-i", "aevalsrc='0.5*sin(2*PI*900*t)':s=48000:c=mono",
           "-t", "3", "-map", "0:a", "-map", "1:a", "-c:a", "pcm_s16le", str(f["multitrack"])])
+    for key, expr in (("fillers", TONE_FILLERS), ("keyed", TONE_KEYED), ("bed", "0.1*sin(2*PI*440*t)")):
+        _run(["-f", "lavfi", "-i", f"aevalsrc='{expr}':s=48000:c=mono", "-t", "6", "-c:a", "pcm_s16le", str(f[key])])
     f["text"].write_text("not media\n", encoding="utf-8")
     return f

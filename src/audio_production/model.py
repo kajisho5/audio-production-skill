@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from . import REQUEST_SCHEMA_VERSION, SKILL_ID
 from .errors import AudioError
+from .fillers import LEXICON_PRESETS, effective_lexicon
 
 REQUEST_SCHEMA_ID = f"{SKILL_ID}/request@{REQUEST_SCHEMA_VERSION}"
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -48,9 +49,25 @@ MAX_MIX_INPUTS = 8
 MAX_CONCAT_INPUTS = 32
 MAX_RANGES = 10000
 MAX_OPERATIONS = 1000
+MAX_WORDS = 100000           # FILLER_REMOVE word timings per operation (about 10 h of speech)
+MAX_LEXICON_WORDS = 256
+TRANSCRIPT_SCHEMA = "transcription-skill/transcript/0.1"   # the transcript document FILLER_REMOVE reads words from
 
 # ---- parameter schemas: name -> {type, required, min, max, enum, description}
 _NUM, _INT, _BOOL, _STR, _RANGES, _LEVELS, _STAGE = "number", "integer", "boolean", "string", "ranges", "levels", "stage"
+_DUCK, _WORDS, _TRANSCRIPT, _LEXICON = "duck", "words", "transcript", "lexicon"
+
+# MIX.duck: the bed input that ffmpeg-skill/audio --duck lowers under input 0 (sidechaincompress keyed by input 0).
+# Ranges are the ones ffmpeg-skill audio.py checks before ffmpeg runs (sidechaincompress's own limits). Only
+# amount_db is required; threshold / attack / release left out keep ffmpeg-skill's defaults (recorded in provenance
+# through the observed command) and need an ffmpeg-skill whose contract declares them (ADR-19).
+DUCK_FIELDS: Dict[str, Dict[str, Any]] = {
+    "input": {"type": _INT, "required": True, "min": 1, "max": MAX_MIX_INPUTS - 1, "description": "index of the input that is ducked (a bed); input 0 is the key it ducks under"},
+    "amount_db": {"type": _NUM, "required": True, "min": 0.0, "max": 60.0, "description": "how far the bed is lowered while input 0 is above the threshold, dB (ffmpeg-skill --duck-amount)"},
+    "threshold_db": {"type": _NUM, "required": False, "min": -60.0, "max": 0.0, "description": "input 0 level in dBFS above which the bed ducks (--duck-threshold; omit: ffmpeg-skill's default)"},
+    "attack_ms": {"type": _NUM, "required": False, "min": 0.01, "max": 2000.0, "description": "ms the bed takes to duck (--duck-attack; omit: ffmpeg-skill's default)"},
+    "release_ms": {"type": _NUM, "required": False, "min": 0.01, "max": 9000.0, "description": "ms the bed takes to come back (--duck-release; omit: ffmpeg-skill's default)"},
+}
 
 # typed dynamics stages (ffmpeg-skill/audio --compress / --limit / --gate; each field is one documented option of
 # acompressor / alimiter / agate, range-checked by ffmpeg-skill again before ffmpeg runs)
@@ -129,8 +146,12 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
         "tolerance_lufs": {"type": _NUM, "required": False, "min": 0.0, "max": 10.0, "description": "verification: measured integrated loudness must be within this of target_lufs, else VALIDATION_ERROR (omit: measure and report only)"},
         "sample_rate": {"type": _INT, "required": False, "enum": list(SAMPLE_RATES), "description": "output sample rate (omit: keep the input's)"},
         "profile": {"type": _STR, "required": False, "max_length": 64, "description": "label of the loudness profile the caller applied; recorded in provenance only"}}},
-    "MIX": {"description": "Sum 2..8 inputs; output duration follows the first input (ffmpeg-skill amix duration=first)", "inputs": (2, MAX_MIX_INPUTS), "parameters": {
-        "levels": {"type": _LEVELS, "required": False, "description": "per-input {gain_db, mute}, aligned with inputs (omit: 0 dB, unmuted)"}}},
+    "MIX": {"description": "Sum 2..8 inputs; output duration follows the first input (ffmpeg-skill amix duration=first); optionally one bed ducked under input 0", "inputs": (2, MAX_MIX_INPUTS), "parameters": {
+        "levels": {"type": _LEVELS, "required": False, "description": "per-input {gain_db, mute}, aligned with inputs (omit: 0 dB, unmuted)"},
+        "duck": {"type": _DUCK, "required": False,
+                 "description": "sidechain ducking (ffmpeg-skill/audio --duck): the input named by duck.input is lowered by amount_db while input 0 is above the threshold; "
+                                "every other input is mixed un-ducked. Input 0 and the ducked input must be unmuted. Needs an ffmpeg-skill whose contract declares --duck "
+                                "(and --duck-threshold / --duck-attack / --duck-release when those are given); otherwise refused with TOOL_ERROR before a tool runs"}}},
     "MONO": {"description": "Down-mix to one channel (stereo input: 0.5*L + 0.5*R)", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
     "STEREO": {"description": "Force two channels (mono is duplicated to both sides)", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
     "DOWNMIX": {"description": "Down-mix 5.1 / 7.1 to stereo with standard centre / LFE / surround weights", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
@@ -151,6 +172,22 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
                                  "light / strong need an ffmpeg-skill whose contract declares the --voice levels (older releases: medium only, "
                                  "anything else is refused with TOOL_ERROR before a tool runs)"},
         "audio_stream": AUDIO_STREAM_PARAM}},
+    "FILLER_REMOVE": {"description": "Remove filler words at caller-supplied word timings (e.g. a transcript's word timestamps) matched against a caller-chosen lexicon; "
+                                     "the remainder is joined in order, sample-accurate. No speech recognition happens here", "inputs": (1, 1), "parameters": {
+        "words": {"type": _WORDS, "required": False, "description": "word timings on the input's timeline: [{start, end, text, confidence?}] (seconds); exactly one of words / transcript"},
+        "transcript": {"type": _TRANSCRIPT, "required": False,
+                       "description": f"a {TRANSCRIPT_SCHEMA} document; the words of its segments are used. A segment whose words are null (no word timestamps) is "
+                                      "refused (INVALID_REQUEST, reason word_timestamps_missing): pass words instead to accept partial coverage"},
+        "lexicon": {"type": _LEXICON, "required": True,
+                    "description": f"which tokens are fillers: {{presets?: {sorted(LEXICON_PRESETS)}, words?: [str], keep?: [str]}}; presets + words - keep, non-empty. "
+                                   "No default: the caller chooses. Matching is exact on normalised text (NFKC, case-folded, punctuation dropped, long-vowel marks unified); "
+                                   "a run of up to 3 touching tokens counts as one word"},
+        "pad": {"type": _NUM, "required": False, "min": 0.0, "max": 0.5, "default": 0.0, "description": "seconds added to each side of a removed filler, never into a neighbouring word"},
+        "merge_gap": {"type": _NUM, "required": False, "min": 0.0, "max": 2.0, "default": 0.0,
+                      "description": "consecutive fillers with no other word between them and at most this many seconds apart are removed as one range (the gap goes too)"},
+        "declick_ms": {"type": _NUM, "required": False, "min": 0.0, "max": 200.0,
+                       "description": "fade in ms on each side of every join (ffmpeg-skill/cut --declick-ms; 0 = butt joins). Omit: ffmpeg-skill's own behaviour. "
+                                      "A value above 0 needs an ffmpeg-skill whose contract declares --declick-ms (otherwise TOOL_ERROR before a tool runs)"}}},
     "CONCAT": {"description": "Concatenate 2..32 inputs in order (ffmpeg concat), optional equal-power crossfade", "inputs": (2, MAX_CONCAT_INPUTS), "parameters": {
         "crossfade": {"type": _NUM, "required": False, "min": 0.0, "max": 30.0, "default": 0.0, "description": "seconds of acrossfade between clips (0 = butt join)"},
         "sample_rate": {"type": _INT, "required": False, "enum": list(SAMPLE_RATES), "description": "output sample rate (omit: the first input's)"},
@@ -314,6 +351,99 @@ def _levels(value: Any, where: str, n_inputs: int) -> List[Dict[str, Any]]:
     return out
 
 
+def _duck(value: Any, where: str, n_inputs: int) -> Dict[str, Any]:
+    d = _obj(value, where, tuple(DUCK_FIELDS), tuple(k for k, v in DUCK_FIELDS.items() if v["required"]))
+    out: Dict[str, Any] = {}
+    for k, spec in DUCK_FIELDS.items():
+        if k in d:
+            out[k] = _number(d[k], f"{where}.{k}", spec["min"], spec["max"], integer=spec["type"] == _INT)
+    out["input"] = int(out["input"])
+    if out["input"] >= n_inputs:
+        raise AudioError("INVALID_REQUEST", f"{where}.input must name one of inputs 1..{n_inputs - 1} (input 0 is the key the bed ducks under)",
+                         {"field": f"{where}.input", "min": 1, "max": n_inputs - 1})
+    return out
+
+
+def _printable(value: Any, where: str, max_length: int = 128) -> str:
+    if not isinstance(value, str) or len(value) > max_length or any(ord(c) < 32 for c in value):
+        raise AudioError("INVALID_REQUEST", f"{where} must be a printable string of at most {max_length} characters", {"field": where})
+    return value
+
+
+def _word(value: Any, where: str) -> Dict[str, Any]:
+    if isinstance(value, dict) and ("start" not in value or "end" not in value or value.get("start") is None or value.get("end") is None):
+        raise AudioError("INVALID_REQUEST", f"{where} has no start / end time: FILLER_REMOVE cuts only at word timestamps the caller supplies",
+                         {"field": where, "reason": "word_timestamps_missing"})
+    d = _obj(value, where, ("start", "end", "text", "confidence"), ("start", "end", "text"))
+    r = _time_range({"start": d["start"], "end": d["end"]}, where)
+    out: Dict[str, Any] = {"start": r.start, "end": r.end, "text": _printable(d["text"], f"{where}.text")}
+    if d.get("confidence") is not None:
+        out["confidence"] = _number(d["confidence"], f"{where}.confidence", 0.0, 1.0)
+    return out
+
+
+def _words(value: Any, where: str) -> List[Dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise AudioError("INVALID_REQUEST", f"{where} must be a non-empty array of {{start, end, text}}", {"field": where, "reason": "word_timestamps_missing"})
+    if len(value) > MAX_WORDS:
+        raise AudioError("INVALID_REQUEST", f"{where}: too many words (max {MAX_WORDS})", {"field": where})
+    words = [_word(w, f"{where}[{i}]") for i, w in enumerate(value)]
+    return sorted(words, key=lambda w: (w["start"], w["end"]))
+
+
+def _transcript_words(value: Any, where: str) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Words of a transcription-skill transcript document, and a reference to it for provenance. Only `schema`,
+    `segments[].words` (and the identifying `id` / `asset_id` / `language`) are read: the document is another
+    skill's, validated by that skill; here it must only carry word timestamps."""
+    if not isinstance(value, dict):
+        raise AudioError("INVALID_REQUEST", f"{where} must be a {TRANSCRIPT_SCHEMA} object", {"field": where})
+    if value.get("schema") != TRANSCRIPT_SCHEMA:
+        raise AudioError("INVALID_REQUEST", f"{where}.schema must be {TRANSCRIPT_SCHEMA!r}, got {value.get('schema')!r}", {"field": f"{where}.schema"})
+    segments = value.get("segments")
+    if not isinstance(segments, list):
+        raise AudioError("INVALID_REQUEST", f"{where}.segments must be an array", {"field": f"{where}.segments"})
+    raw: List[Any] = []
+    untimed: List[str] = []
+    for i, seg in enumerate(segments):
+        if not isinstance(seg, dict):
+            raise AudioError("INVALID_REQUEST", f"{where}.segments[{i}] must be an object", {"field": f"{where}.segments[{i}]"})
+        w = seg.get("words")
+        if w is None:
+            untimed.append(str(seg.get("id") or i))
+            continue
+        if not isinstance(w, list):
+            raise AudioError("INVALID_REQUEST", f"{where}.segments[{i}].words must be an array or null", {"field": f"{where}.segments[{i}].words"})
+        raw.extend(w)
+    if untimed:
+        raise AudioError("INVALID_REQUEST", f"{where}: {len(untimed)} segment(s) carry no word timestamps ({', '.join(untimed[:5])}{'...' if len(untimed) > 5 else ''}); "
+                         "FILLER_REMOVE cuts only at supplied word times (transcribe with word timestamps, or pass words for the segments that have them)",
+                         {"field": f"{where}.segments", "reason": "word_timestamps_missing", "segments": untimed[:50]})
+    if not raw:
+        raise AudioError("INVALID_REQUEST", f"{where} contains no words", {"field": where, "reason": "word_timestamps_missing"})
+    words = _words([{k: v for k, v in w.items() if k in ("start", "end", "text", "confidence")} if isinstance(w, dict) else w for w in raw], f"{where}.segments[].words")
+    ref = {k: value[k] for k in ("id", "asset_id", "language") if isinstance(value.get(k), str) and len(value[k]) <= 128}
+    ref["schema"] = TRANSCRIPT_SCHEMA
+    return words, ref
+
+
+def _lexicon(value: Any, where: str) -> Dict[str, Any]:
+    d = _obj(value, where, ("presets", "words", "keep"), ())
+    out: Dict[str, Any] = {}
+    for key in ("presets", "words", "keep"):
+        v = d.get(key, [])
+        if not isinstance(v, list) or len(v) > MAX_LEXICON_WORDS:
+            raise AudioError("INVALID_REQUEST", f"{where}.{key} must be an array of at most {MAX_LEXICON_WORDS} strings", {"field": f"{where}.{key}"})
+        items = [_printable(x, f"{where}.{key}[{i}]", 64) for i, x in enumerate(v)]
+        if key == "presets":
+            bad = [x for x in items if x not in LEXICON_PRESETS]
+            if bad:
+                raise AudioError("INVALID_REQUEST", f"{where}.presets: unknown preset(s) {bad}; available: {sorted(LEXICON_PRESETS)}", {"field": f"{where}.presets", "available": sorted(LEXICON_PRESETS)})
+        out[key] = sorted(set(items))
+    if not effective_lexicon(out["presets"], out["words"], out["keep"]):
+        raise AudioError("INVALID_REQUEST", f"{where}: the lexicon is empty (choose presets and / or words; there is no default)", {"field": where})
+    return out
+
+
 def _check_noise_floor(value: Any, where: str) -> None:
     """Refuse a NOISE_REDUCTION strength_db below 20 with the reason (ADR-17); other bad values fall through to _number."""
     lo, hi = NOISE_REDUCTION_STRENGTH_DB
@@ -361,6 +491,14 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
             out[name] = [r.to_dict() for r in _ranges(v, w)]
         elif t == _LEVELS:
             out[name] = _levels(v, w, n_inputs)
+        elif t == _DUCK:
+            out[name] = _duck(v, w, n_inputs)
+        elif t == _WORDS:
+            out[name] = _words(v, w)
+        elif t == _TRANSCRIPT:
+            out["words"], out["transcript"] = _transcript_words(v, w)
+        elif t == _LEXICON:
+            out[name] = _lexicon(v, w)
         elif t == _STAGE:
             spec_stage = DYNAMICS_STAGES[ps["stage"]]
             sd = _obj(v, w, tuple(spec_stage), ())
@@ -371,6 +509,13 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
         raise AudioError("INVALID_TIME_RANGE", f"{where}: end must be greater than start", {"field": where})
     if op_type == "MIX" and "levels" not in out:
         out["levels"] = [{"gain_db": 0.0, "mute": False} for _ in range(n_inputs)]
+    if op_type == "MIX" and "duck" in out:
+        k = out["duck"]["input"]
+        if out["levels"][0]["mute"] or out["levels"][k]["mute"]:
+            raise AudioError("INVALID_REQUEST", f"{where}.duck: input 0 (the key) and input {k} (the ducked bed) must not be muted", {"field": f"{where}.duck"})
+    if op_type == "FILLER_REMOVE" and ("words" in d) == ("transcript" in d):
+        raise AudioError("INVALID_REQUEST", f"{where}: FILLER_REMOVE takes exactly one of words / transcript (word timestamps are required)",
+                         {"field": where, "reason": "word_timestamps_missing" if "words" not in d else "ambiguous_word_source"})
     return out
 
 

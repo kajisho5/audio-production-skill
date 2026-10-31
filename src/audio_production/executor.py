@@ -21,6 +21,7 @@ from . import RESPONSE_SCHEMA_VERSION, SKILL_ID, VERSION
 from .adapter import FfmpegSkill, ToolRun, fmt_db, fmt_seconds
 from .canonical import sha256_file, stable_hash
 from .errors import AudioError
+from .fillers import effective_lexicon, match_fillers, removal_ranges
 from .graph import Node, OperationGraph
 from .model import CHANNEL_LAYOUTS, INTERMEDIATE_FORMAT, OUTPUT_FORMATS, AudioRequest, TimeRange, parse_request
 from .security import PathPolicy
@@ -45,6 +46,7 @@ TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
     "TRIM": ("cut", []),
     "CUT": ("cut", []),
     "SILENCE_REMOVE": ("cut", []),
+    "FILLER_REMOVE": ("cut", []),
     "FADE_IN": ("audio", ["filter:afade"]),
     "FADE_OUT": ("audio", ["filter:afade"]),
     "NORMALIZE": ("loudness", ["filter:loudnorm"]),
@@ -299,6 +301,8 @@ class Executor:
             ranges = apply_silence_rules([TimeRange(r["start"], r["end"]) for r in p["ranges"]], p.get("margin", 0.0), p.get("min_duration", 0.0))
             st.measurements["effective_ranges"] = [r.to_dict() for r in ranges]
             st.segments = cut(ins[0].segments, ranges, where) if ranges else list(ins[0].segments)
+        elif node.type == "FILLER_REMOVE":
+            self._plan_fillers(st, ins[0], where)
         elif node.type in ("FADE_IN", "FADE_OUT"):
             fade_ranges(ins[0].segments, p["duration"] if node.type == "FADE_IN" else None, p["duration"] if node.type == "FADE_OUT" else None)
             st.segments = list(ins[0].segments)
@@ -306,6 +310,9 @@ class Executor:
             st.segments = mix([i.segments for i in ins])
             if all(lv["mute"] for lv in p["levels"]):
                 raise AudioError("INVALID_REQUEST", f"{where}: every MIX input is muted", {"node_id": node.node_id})
+            if "duck" in p:
+                # refused here, at planning (dry run included), when the located ffmpeg-skill cannot duck as asked
+                st.measurements["duck"] = {**p["duck"], "key_input": 0, "ffmpeg_skill_flags": " ".join(self._duck_flags(p["duck"], where))}
         elif node.type == "CONCAT":
             st.segments = concat([i.segments for i in ins], p.get("crossfade", 0.0))
         elif node.type == "VOICE_CLEANUP":
@@ -323,6 +330,51 @@ class Executor:
             st.segments = list(ins[0].segments)
         else:
             st.segments = list(ins[0].segments)
+
+    def _plan_fillers(self, st: NodeState, src: NodeState, where: str) -> None:
+        """FILLER_REMOVE: the caller's word timings + lexicon -> removal ranges (fillers.py, pure arithmetic), refused
+        at planning when the located ffmpeg-skill cannot apply the requested declick (ADR-18)."""
+        p = st.node.parameters
+        total = total_duration(src.segments)
+        words = p["words"]
+        late = [w for w in words if w["start"] >= total - 1e-6]
+        if late:
+            raise AudioError("INVALID_TIME_RANGE", f"{where}: word {late[0]['text']!r} starts at {late[0]['start']}s, at or after the input's end ({total:.3f}s); "
+                             "word times must be on the input's timeline", {"start": late[0]["start"], "duration": total})
+        lex = p["lexicon"]
+        runs = match_fillers(words, effective_lexicon(lex["presets"], lex["words"], lex["keep"]))
+        ranges = [TimeRange(a, b) for a, b in removal_ranges(words, runs, p.get("pad", 0.0), p.get("merge_gap", 0.0), total)]
+        declick = p.get("declick_ms")
+        if declick is not None and declick > 0:
+            self._require_flags("cut", ("declick_ms",), where, "FILLER_REMOVE declick_ms")
+        st.measurements["effective_ranges"] = [r.to_dict() for r in ranges]
+        st.measurements["filler_remove"] = {
+            "matched": [{"text": " ".join(words[j]["text"] for j in range(a, b)), "start": words[a]["start"], "end": words[b - 1]["end"]} for a, b in runs],
+            "matched_count": len(runs), "ranges_count": len(ranges), "removed_seconds": round(sum(r.duration for r in ranges), 6),
+            "words_count": len(words), "lexicon": sorted(effective_lexicon(lex["presets"], lex["words"], lex["keep"])),
+            "declick_ms": declick if declick is not None and self.skill.takes_flag("cut", "declick_ms") else None}
+        st.segments = cut(src.segments, ranges, where) if ranges else list(src.segments)
+
+    def _require_flags(self, tool: str, flags: Tuple[str, ...], where: str, feature: str) -> None:
+        """Refuse before any tool runs when the located ffmpeg-skill's contract does not declare `flags` for `tool`
+        (capability detection, ADR-15): never a version comparison, never a silent substitute."""
+        info = self.skill.info()
+        missing = [f for f in flags if not info.takes_flag(tool, f)]
+        if missing:
+            raise AudioError("TOOL_ERROR", f"{where}: {feature} needs ffmpeg-skill/{tool} " + ", ".join("--" + f.replace("_", "-") for f in missing)
+                             + f", which the located ffmpeg-skill ({info.version}) does not declare",
+                             {"reason": "ffmpeg_skill_flag_missing", "feature": feature, "tool": f"ffmpeg-skill/{tool}", "missing_flags": missing,
+                              "ffmpeg_skill_version": info.version}, retryable=False)
+
+    def _duck_flags(self, duck: Dict[str, Any], where: str) -> List[str]:
+        """ffmpeg-skill/audio --duck flags for MIX.duck (ADR-19); every flag used must be declared by the located contract."""
+        fields = [("threshold_db", "duck_threshold", fmt_db), ("attack_ms", "duck_attack", fmt_seconds), ("release_ms", "duck_release", fmt_seconds)]
+        self._require_flags("audio", ("duck", "duck_amount", *(flag for key, flag, _ in fields if key in duck)), where, "MIX duck")
+        out = ["--duck", "--duck-amount", fmt_db(duck["amount_db"])]
+        for key, flag, fmt in fields:
+            if key in duck:
+                out += ["--" + flag.replace("_", "-"), fmt(duck[key])]
+        return out
 
     def _voice_flag(self, level: str, where: str) -> List[str]:
         """ffmpeg-skill/audio's --voice for `level`, detected from the located contract (ADR-16): `--voice <level>` when
@@ -391,7 +443,7 @@ class Executor:
         src: str = self._artifact_path(states[node.inputs[0]], sources)
         if node.type == "GAIN":
             return [("audio", [src, "--gain", fmt_db(p["gain_db"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
-        if node.type in ("TRIM", "CUT", "SILENCE_REMOVE"):
+        if node.type in ("TRIM", "CUT", "SILENCE_REMOVE", "FILLER_REMOVE"):
             # ffmpeg-skill/cut --accurate: sample-accurate re-encode (atrim) to PCM WAV; a compressed or video-container
             # source is decoded on the way (ffmpeg-skill >= 0.9.1)
             first = states[node.inputs[0]]
@@ -402,7 +454,10 @@ class Executor:
             keep = complement(rem, total) if rem else [TimeRange(0.0, total)]
             if len(keep) == 1:
                 return [("cut", [src, "--start", fmt_seconds(keep[0].start), "--end", fmt_seconds(keep[0].end), "--accurate", "-o", o])]
-            return [("cut", [src, "--segments", ",".join(f"{fmt_seconds(k.start)}-{fmt_seconds(k.end)}" for k in keep), "--accurate", "-o", o])]
+            declick: List[str] = []
+            if node.type == "FILLER_REMOVE" and p.get("declick_ms") is not None and self.skill.takes_flag("cut", "declick_ms"):
+                declick = ["--declick-ms", fmt_seconds(p["declick_ms"])]     # 0 = butt joins; > 0 was checked at planning
+            return [("cut", [src, "--segments", ",".join(f"{fmt_seconds(k.start)}-{fmt_seconds(k.end)}" for k in keep), "--accurate", *declick, "-o", o])]
         if node.type == "FADE_IN":
             return [("audio", [src, "--fade-in", fmt_seconds(p["duration"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "FADE_OUT":
@@ -444,8 +499,15 @@ class Executor:
                 args += ["--channels", str(int(p["channels"]))]
             return [("join", args + ["-o", o])]
         if node.type == "MIX":
-            # pairwise fold through ffmpeg-skill/audio --music (main + one bed per call); intermediates next to the output
-            live = [(self._artifact_path(states[i], sources), lv["gain_db"]) for i, lv in zip(node.inputs, p["levels"]) if not lv["mute"]]
+            # pairwise fold through ffmpeg-skill/audio --music (main + one bed per call); intermediates next to the output.
+            # With duck, the ducked bed is folded first, keyed by input 0 alone (sidechaincompress inside that call);
+            # the other inputs are summed afterwards un-ducked (amix normalize=0, so the fold order does not change the sum)
+            duck = p.get("duck")
+            order = list(range(len(node.inputs)))
+            if duck:
+                order.remove(duck["input"])
+                order.insert(1, duck["input"])
+            live = [(self._artifact_path(states[node.inputs[i]], sources), p["levels"][i]["gain_db"]) for i in order if not p["levels"][i]["mute"]]
             calls: List[Tuple[str, List[str]]] = []
             main_path, main_gain = live[0]
             if len(live) == 1:
@@ -453,6 +515,8 @@ class Executor:
             for k, (bed, bed_gain) in enumerate(live[1:], start=1):
                 target = o if k == len(live) - 1 else f"{o[:-4]}.mix{k}.wav"
                 args = [main_path, "--music", bed, "--music-volume", fmt_db(bed_gain)]
+                if k == 1 and duck:
+                    args += self._duck_flags(duck, f"operation {node.node_id}")
                 if k == 1 and main_gain:
                     args += ["--gain", fmt_db(main_gain)]
                 calls.append(("audio", args + ["-o", target]))
@@ -491,6 +555,8 @@ class Executor:
                 st.tool_commands += run.commands
                 if tool == "cut" and isinstance(run.data.get("precision"), str):
                     st.measurements["cut"] = {"precision": run.data["precision"], "duration_error_ms": run.data.get("duration_error_ms"), "reencoded": run.data.get("reencoded")}
+                    if node.type == "FILLER_REMOVE" and "declick_ms" in run.data:
+                        st.measurements["cut"]["declick_ms"] = run.data["declick_ms"]     # the fade ffmpeg-skill applied at each join
                 if tool == "loudness":
                     loudness_data = run.data
             st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources))

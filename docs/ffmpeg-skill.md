@@ -10,8 +10,8 @@ It never calls `ffmpeg` or `ffprobe` itself.
 | ffmpeg-skill tool | used for | flags emitted |
 |---|---|---|
 | `ffmpeg-skill/probe` | source facts, every output validation | positional input |
-| `ffmpeg-skill/audio` | GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP, MIX, audio extraction from video, export | `--gain`, `--fade-in`, `--fade-out`, `--mono`, `--stereo`, `--downmix`, `--denoise`, `--denoise-strength`, `--voice [light\|medium\|strong]`, `--music`, `--music-volume`, `--gate/--gate-*`, `--compress/--comp-*`, `--limit/--limit-*`, `-o`, `--json` |
-| `ffmpeg-skill/cut` | TRIM, CUT, SILENCE_REMOVE | `--start`, `--end`, `--segments`, `--accurate`, `-o`, `--json` |
+| `ffmpeg-skill/audio` | GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP, MIX, audio extraction from video, export | `--gain`, `--fade-in`, `--fade-out`, `--mono`, `--stereo`, `--downmix`, `--denoise`, `--denoise-strength`, `--voice [light\|medium\|strong]`, `--music`, `--music-volume`, `--duck`, `--duck-amount`, `--duck-threshold`, `--duck-attack`, `--duck-release` (MIX `duck`, optional), `--gate/--gate-*`, `--compress/--comp-*`, `--limit/--limit-*`, `-o`, `--json` |
+| `ffmpeg-skill/cut` | TRIM, CUT, SILENCE_REMOVE, FILLER_REMOVE | `--start`, `--end`, `--segments`, `--accurate`, `--declick-ms` (FILLER_REMOVE, optional), `-o`, `--json` |
 | `ffmpeg-skill/loudness` | NORMALIZE, verified from that same call's `--json` `result` field | `-I`, `--tp`, `--lra`, `--sample-rate`, `-o`, `--json` |
 | `ffmpeg-skill/join` | CONCAT | positional inputs, `--transition none|fade`, `--duration`, `--sample-rate`, `--channels`, `-o`, `--json` |
 
@@ -27,6 +27,9 @@ reports each under `checks.ffmpeg_skill.optional_flags`:
 |---|---|---|---|
 | `audio --overwrite` | ffmpeg-skill >= 1.10 (which refuses to replace an existing output without it) | export to an existing path when the request set `overwrite: true` | not passed; older releases replace the file anyway and reject the flag |
 | `audio --voice <level>` (value form) | ffmpeg-skill >= 1.13 (`voice` declared as a string with `enum` light / medium / strong) | VOICE_CLEANUP `level` passed as `--voice <level>` | `voice` is a boolean switch (0.12.2 … 1.12): only `level: medium` runs, as the bare `--voice` — the same chain byte for byte; `light` / `strong` are refused at planning with `TOOL_ERROR` `voice_level_unsupported` (ADR-16). `doctor` reports `checks.ffmpeg_skill.voice_levels` |
+| `audio --duck`, `--duck-amount` | 0.12.2 and later | MIX `duck` (the ducked bed's fold) | a MIX with `duck` is refused at planning, `TOOL_ERROR` `ffmpeg_skill_flag_missing` (ADR-19); a MIX without `duck` never needs them |
+| `audio --duck-threshold`, `--duck-attack`, `--duck-release` | 2.x (not 0.12.2, whose sidechain threshold 0.05, attack 20 ms and release 400 ms are fixed) | MIX `duck.threshold_db` / `attack_ms` / `release_ms` when given | refused at planning when given; omitted, ffmpeg-skill's defaults apply |
+| `cut --declick-ms` | 2.x (not 0.12.2) | FILLER_REMOVE `declick_ms` (fade on each side of every `--segments` join) | `declick_ms` > 0 refused at planning (ADR-18); 0 or omitted needs nothing (0.12.2 butts the joins) |
 | `loudness --measure-only` | every release this skill can run | NORMALIZE verification when the call's `--json` has no `result` (before 0.12.0); the measurement is read from the document's top level, `result` or `measured` (2.x) | `TOOL_ERROR` `loudness_result_missing` if `result` is also absent |
 
 ffmpeg-skill 2.0's other breaking changes do not reach this skill: it emits no `--crf` (renamed `--quality`), imports
@@ -96,6 +99,24 @@ Audio stream selection is no longer a gap: `--audio-stream` has existed on `audi
 tools deliberately exclude `--audio-stream` (0.12.0 CHANGELOG: combining separate files is "a different problem
 shape"). `MIX` also always uses stream 0 of each input, for the same reason — it folds already-resolved inputs
 through `--music`, which reads stream 0 of the bed file regardless of `--audio-stream` on the main input.
+
+## `--duck` (MIX) and `cut --declick-ms` (FILLER_REMOVE), read 2026-10-31
+
+From `scripts/audio.py` / `scripts/cut.py` and `_contract.py --json` at 0.12.2 (`336e0c4`) and 2.22.4 (`bb51b28`):
+
+- `--music B --duck`: `[main]asplit[mainA][sc]; [music][sc]sidechaincompress=threshold=<lin>:ratio=max(2, amount/3):
+  attack=<ms>:release=<ms>:makeup=1[ducked]; [mainA][ducked]amix=inputs=2:duration=first:normalize=0`. 0.12.2 fixes
+  threshold 0.05 (−26.02 dBFS), attack 20, release 400; 2.x exposes them (`--duck-threshold` in dBFS, converted to
+  linear) and range-checks all four (amount 0..60, threshold −60..0, attack 0.01..2000, release 0.01..9000) before
+  ffmpeg runs. `--duck` without `--music` is refused by audio.py; `--effects F` is a further `volume` + `amix
+  normalize=0` that is never ducked — the same graph as one more `--music` fold (ADR-19).
+- Measured with the integration fixtures (key: 1 kHz at amplitude 0.5 only 2..5 s; bed: 440 Hz at 0.1), `amount_db`
+  24 on both 0.12.2 and 2.22.4: the bed's 440 Hz band under the key drops by more than 6 dB against the un-ducked mix
+  and is within 1.5 dB of it before the key.
+- `cut --segments ... --accurate --declick-ms N`: an `afade` out / in of N ms on each side of every join the
+  re-encode makes (default 20, `--no-declick` / `0` = butt); duration and sample count are unchanged (the fixture keeps
+  exactly 244800 samples with `declick_ms` 15). The `--json` response reports the applied `declick_ms`. 0.12.2 has no
+  declick at all.
 
 ## `--voice` (VOICE_CLEANUP), measured 2026-10-30
 
