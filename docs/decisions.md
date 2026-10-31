@@ -120,3 +120,18 @@
   (the full filter chain) in `tool_commands_observed`. Capability id `audio.voice_cleanup`. Adding an operation
   is breaking for pinning agents (docs/contract.md): `tests/contract/contract.json` is regenerated, and the version
   is bumped by the release workflow from the PR label (ADR-14), not by hand.
+- **ADR-17 NOISE_REDUCTION `strength_db` is 20..60, the range afftdn can run.** ffmpeg-skill's `--denoise-strength S`
+  becomes afftdn `nf=-S`, and afftdn accepts a noise floor only in [−80, −20] dB (FFmpeg 6.1 refuses `nf=-15`,
+  docs/ffmpeg-skill.md), while ffmpeg-skill's own flag accepts 10..60. The schema minimum of 10 therefore let
+  10 ≤ strength_db < 20 pass validation and fail at run time with `TOOL_ERROR` after earlier steps had already run.
+  The minimum is now 20 (`model.NOISE_REDUCTION_STRENGTH_DB`), so the contract only declares values that execute;
+  10..19.99 is refused at validation (and so by `validate`, `plan` and `run --dry-run`, before any tool runs) with
+  `INVALID_REQUEST`, `details {field, min, max}` like every other range error, and a message that names afftdn's range
+  so a caller sees why. Rejected: clamping to 20 (silently runs something other than what was asked, ADR-3) and
+  remapping strength to a different `nf` (the engine's mapping is ffmpeg-skill's; a fix there, if it ever narrows its
+  own flag, needs nothing here). This narrows a pinned operation's `parameters`, which docs/contract.md classifies as
+  breaking for a pinning agent: `tests/contract/contract.json` is regenerated and the agent must re-pin. It is still
+  released as a fix (patch, label `fix`), not a minor: no request that could ever succeed is refused, the only
+  requests newly refused are ones that always failed, and video-production-agent already refused 10..19.99 itself
+  (its ADR-063), so its `0.4.x` range check keeps accepting the release. VOICE_CLEANUP is unaffected (fixed `nf=-25`,
+  ADR-16).

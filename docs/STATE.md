@@ -45,10 +45,6 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
    to it (or the push step in release.yml needs converting to open a PR instead). Do not claim PyPI availability
    before a human confirms a publish actually ran.
 2. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
-3. NOISE_REDUCTION `strength_db` accepts [10, 60] but ffmpeg-skill maps it to afftdn `nf=-<strength>`, valid only in
-   [−80, −20]: 10 ≤ strength_db < 20 fails at run time with `TOOL_ERROR` (measured on FFmpeg 6.1, docs/ffmpeg-skill.md).
-   Raising the minimum to 20 is a change to a pinned operation's parameters (agent re-pin). VOICE_CLEANUP is not
-   affected (fixed `nf=-25`).
 
 ## Known limitations (see README "Current limitations")
 
@@ -108,3 +104,9 @@ reported `unknown` by doctor; no eviction.
   levels refused at planning); `doctor` reports `checks.ffmpeg_skill.voice_levels`; capability id
   `audio.voice_cleanup`. Breaking for pinning agents (an operation added; `tools`, `provides`, `ffmpeg_skill` blocks
   changed); `tests/contract/contract.json` regenerated, version left to the release workflow.
+- 2026-10-31: NOISE_REDUCTION `strength_db` minimum raised from 10 to 20 (ADR-17; closes the PLANNED item). ffmpeg-skill
+  maps it to afftdn `nf=-<strength>`, valid only in [−80, −20], so 10 ≤ strength_db < 20 validated and then failed at run
+  time with `TOOL_ERROR`; it is now refused at validation / planning (dry run included) with `INVALID_REQUEST` naming
+  afftdn's range. `model.NOISE_REDUCTION_STRENGTH_DB = (20.0, 60.0)`. Change to a pinned operation's `parameters`
+  (`tests/contract/contract.json` regenerated; video-production-agent must re-pin — it already refused 10..19.99 on its
+  own, ADR-063 there); released as a fix (patch) by the release workflow. VOICE_CLEANUP not affected (fixed `nf=-25`).

@@ -144,6 +144,16 @@ def test_noise_reduction(workspace):
     assert d["error"]["code"] == "UNSUPPORTED_OPERATION"
 
 
+def test_noise_reduction_strength_floor_at_planning(workspace):
+    # ADR-17: 19 dB would become afftdn nf=-19 (afftdn accepts -80..-20): refused before any tool runs, dry run included
+    for extra in ((), ("--dry-run",)):
+        code, d = run(request_doc([op("d", "NOISE_REDUCTION", ["track:t1"], mode="fft", strength_db=19)]), *extra)
+        assert not d["ok"] and d["error"]["code"] == "INVALID_REQUEST" and "afftdn" in d["error"]["message"], d
+        assert not (workspace / "out" / "main.wav").exists()
+    code, d = run(request_doc([op("d", "NOISE_REDUCTION", ["track:t1"], mode="fft", strength_db=20)]), "--dry-run")
+    assert d["ok"] and d["dry_run"], d.get("error")
+
+
 def test_concat(workspace):
     doc = request_doc([op("k", "CONCAT", ["track:t1", "track:t2"])],
                       sources=[{"source_id": "a", "path": "tone.wav"}, {"source_id": "b", "path": "stereo.m4a"}],

@@ -22,6 +22,20 @@ def err(fn, code, *args, **kw):
 
 
 # ---- request schema
+def test_noise_reduction_strength_floor_is_20():
+    # ADR-17: strength_db becomes afftdn nf=-strength_db and afftdn accepts only -80..-20, so 10..19.99 is refused here
+    # (it used to validate and then fail at run time with TOOL_ERROR)
+    v = validate_parameters
+    assert OPERATION_TYPES["NOISE_REDUCTION"]["parameters"]["strength_db"]["min"] == 20.0
+    for bad in (10, 19, 19.99):
+        e = err(v, "INVALID_REQUEST", "NOISE_REDUCTION", {"mode": "fft", "strength_db": bad}, 1, "p")
+        assert "afftdn" in e.message and "-80..-20" in e.message and e.details == {"field": "p.strength_db", "min": 20.0, "max": 60.0}
+    assert v("NOISE_REDUCTION", {"mode": "fft", "strength_db": 20}, 1, "p")["strength_db"] == 20.0
+    assert v("NOISE_REDUCTION", {"mode": "fft", "strength_db": 60}, 1, "p")["strength_db"] == 60.0
+    err(v, "INVALID_REQUEST", "NOISE_REDUCTION", {"mode": "fft", "strength_db": 60.5}, 1, "p")
+    err(v, "INVALID_REQUEST", "NOISE_REDUCTION", {"mode": "fft", "strength_db": True}, 1, "p")   # not a number: generic message
+
+
 def test_minimal_request_parses():
     req = parse_request(request_doc([{"op_id": "g", "type": "GAIN", "inputs": ["track:t1"], "parameters": {"gain_db": -3}}]))
     assert req.project.operations[0].parameters == {"gain_db": -3.0, "audio_stream": 0}

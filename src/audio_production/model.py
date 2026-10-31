@@ -93,6 +93,11 @@ DYNAMICS_STAGES: Dict[str, Dict[str, Dict[str, Any]]] = {
 # operation can never produce the out-of-range nf that a --denoise-strength below 20 would (ADR-16).
 VOICE_LEVELS = ("light", "medium", "strong")
 
+# NOISE_REDUCTION.strength_db: ffmpeg-skill audio.py passes --denoise-strength S to afftdn as nf=-S, and afftdn only
+# accepts a noise floor of -80..-20 dB (FFmpeg 6.1 refuses nf=-15, docs/ffmpeg-skill.md). ffmpeg-skill itself accepts
+# 10..60, so 10 <= S < 20 used to pass validation and fail at run time with TOOL_ERROR; the floor is 20 here (ADR-17).
+NOISE_REDUCTION_STRENGTH_DB = (20.0, 60.0)
+
 AUDIO_STREAM_PARAM: Dict[str, Any] = {"type": _INT, "required": False, "min": 0, "default": 0,
                                        "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; "
                                                        "probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"}
@@ -131,7 +136,8 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
     "DOWNMIX": {"description": "Down-mix 5.1 / 7.1 to stereo with standard centre / LFE / surround weights", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
     "NOISE_REDUCTION": {"description": "FFT noise reduction (ffmpeg afftdn, adaptive noise tracking)", "inputs": (1, 1), "parameters": {
         "mode": {"type": _STR, "required": True, "enum": ["fft"], "description": "only 'fft' (afftdn) is implemented"},
-        "strength_db": {"type": _NUM, "required": True, "min": 10.0, "max": 60.0, "description": "noise floor to remove in dB"},
+        "strength_db": {"type": _NUM, "required": True, "min": NOISE_REDUCTION_STRENGTH_DB[0], "max": NOISE_REDUCTION_STRENGTH_DB[1],
+                        "description": "noise floor to remove in dB (afftdn nf=-strength_db; afftdn accepts only -80..-20, hence 20..60)"},
         "audio_stream": AUDIO_STREAM_PARAM}},
     "DYNAMICS": {"description": "Typed dynamics: gate -> compressor -> limiter (fixed order); at least one stage", "inputs": (1, 1), "parameters": {
         "compressor": {"type": _STAGE, "required": False, "stage": "compressor", "description": "acompressor parameters (omitted fields keep ffmpeg's defaults, recorded by ffmpeg-skill)"},
@@ -308,6 +314,16 @@ def _levels(value: Any, where: str, n_inputs: int) -> List[Dict[str, Any]]:
     return out
 
 
+def _check_noise_floor(value: Any, where: str) -> None:
+    """Refuse a NOISE_REDUCTION strength_db below 20 with the reason (ADR-17); other bad values fall through to _number."""
+    lo, hi = NOISE_REDUCTION_STRENGTH_DB
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value < lo:
+        raise AudioError("INVALID_REQUEST",
+                         f"{where} must be within [{lo}, {hi}], got {value}: ffmpeg-skill passes it to afftdn as nf=-{value:g}, "
+                         f"and afftdn only accepts a noise floor of -80..-20 dB, so anything below {lo:g} would fail at run time",
+                         {"field": where, "min": lo, "max": hi})
+
+
 def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) -> Dict[str, Any]:
     """Validate and normalise parameters against the schema of op_type. Returns the effective parameters
     (defaults filled in), with every number as float and nothing unknown."""
@@ -323,6 +339,8 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
         v = d[name]
         t = ps["type"]
         if t == _NUM:
+            if op_type == "NOISE_REDUCTION" and name == "strength_db":
+                _check_noise_floor(v, w)
             out[name] = _number(v, w, ps.get("min"), ps.get("max"))
         elif t == _INT:
             iv = int(_number(v, w, ps.get("min"), ps.get("max"), integer=True))
