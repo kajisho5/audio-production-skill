@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.5 - 2026-10-31
+
+- fix: NOISE_REDUCTION strength_db minimum 20 (afftdn nf range) (#24) (2086430)
+
 ## v0.4.4 - 2026-10-30
 
 - ci: pin third-party actions by commit SHA (#23) (fe00ce7)
