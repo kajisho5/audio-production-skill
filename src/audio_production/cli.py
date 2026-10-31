@@ -70,9 +70,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def _read_document(spec: str) -> Any:
     try:
-        text = sys.stdin.read() if spec == "-" else open(spec, "r", encoding="utf-8").read()
+        # JSON is UTF-8 (RFC 8259), whatever the console code page: stdin is read as bytes, never through the locale
+        # encoding (cp1252 on Windows cannot even represent a FILLER_REMOVE lexicon such as えー)
+        raw = sys.stdin.buffer.read() if spec == "-" else open(spec, "rb").read()
+        text = raw.decode("utf-8-sig")
     except OSError as e:
         raise AudioError("INVALID_REQUEST", f"cannot read request document: {e}")
+    except UnicodeDecodeError as e:
+        raise AudioError("INVALID_REQUEST", f"request document is not UTF-8: {e}")
     if len(text) > 16 * 1024 * 1024:
         raise AudioError("INVALID_REQUEST", "request document is larger than 16 MiB")
     try:
@@ -88,7 +93,8 @@ def _error_document(e: AudioError, dry_run: bool) -> dict:
 
 def _emit(doc: dict, as_json: bool) -> None:
     if as_json:
-        sys.stdout.write(json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False) + "\n")
+        # ASCII-only JSON (non-ASCII as \\u escapes): one document any consumer decodes identically, on any code page
+        sys.stdout.write(json.dumps(doc, indent=2, ensure_ascii=True, allow_nan=False) + "\n")
     else:
         _human(doc)
     sys.stdout.flush()
@@ -121,6 +127,11 @@ def _human(doc: dict) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    for stream in (sys.stdout, sys.stderr):      # human-readable text never crashes on a narrow console code page
+        try:
+            stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
+        except (AttributeError, ValueError):
+            pass
     args = build_parser().parse_args(argv)
     as_json = bool(getattr(args, "json", False))
     if args.cmd in ("skill", "contract"):

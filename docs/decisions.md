@@ -186,3 +186,10 @@
   optional MIX parameter (`parameters` is not in its fatal drift set), no change to `errors`, `request`,
   `response`, `provenance` or `execution`; `tests/contract/contract.json` is regenerated and the release stays
   `0.4.x` (no `feature` label), which video-production-agent's range check accepts.
+- **ADR-20 The CLI's JSON boundary is UTF-8 in and ASCII out, independent of the console code page.** FILLER_REMOVE
+  brought the first non-ASCII text into the contract (`filler_lexicons`) and into requests (えー). Windows consoles
+  encode stdio through cp1252, so `skill --json` crashed writing the contract and a request with Japanese words could
+  not be read (Windows CI). The request document is read from `sys.stdin.buffer` and decoded as UTF-8 (RFC 8259; a BOM
+  is tolerated, anything else is `INVALID_REQUEST`), and every JSON document is written with `ensure_ascii=True`
+  (non-ASCII as `\u` escapes), so any consumer parses the same document on any code page; human-readable output
+  uses `errors="backslashreplace"`. A caller must send the request as UTF-8 bytes.
