@@ -193,3 +193,21 @@
   is tolerated, anything else is `INVALID_REQUEST`), and every JSON document is written with `ensure_ascii=True`
   (non-ASCII as `\u` escapes), so any consumer parses the same document on any code page; human-readable output
   uses `errors="backslashreplace"`. A caller must send the request as UTF-8 bytes.
+- **ADR-21 ffmpeg-skill 3.0.0 is accepted (its `contract_version` 2.0); the Python 3.9 job tests the last 2.x.**
+  ffmpeg-skill 3.0.0 (`1dc2f52`) declares `contract_version` 2.0 where every earlier release declared 1.0. The
+  registry range `>=1.0 <2.0` excluded it, and `doctor` warned that the number differed. 3.0 also drops Python 3.9
+  and FFmpeg 5.x and changes `cut.py`'s defaults.
+  - *What changed for `cut.py`, the one tool here it touches.* The edit list is now kept on a stream copy,
+    `--vfr-guard` defaults to `sampled`, SDR HEVC is kept as HEVC, and `precision` is the least exact segment's.
+    That last change differs from 2.x only for an audio-only `--segments` join of copied and re-encoded parts.
+    This skill always passes `--accurate`, so every part is re-encoded: no stream copy, no edit list, no HEVC
+    video, and `precision` (copied into `measurements.cut`) means the same on both. No flag in `FLAGS_USED` was
+    removed. The full suite (135 tests, real media included) passes against 3.0.0 on Python 3.11 with ffmpeg 6.1.1.
+  - *Decision.* `adapter.KNOWN_CONTRACT_VERSIONS = ("1.0", "2.0")`. `dependencies[].version_range` becomes
+    `>=1.0 <3.0`, and only a `contract_version` outside the known majors is warned about.
+    `ffmpeg_skill.contract_version` stays the oldest (1.0), where the range starts. Still reported, never gated on
+    (ADR-15).
+  - *Python 3.9* stays supported by this skill (`requires-python >=3.9`). ffmpeg-skill 3.x does not support it, so
+    the CI job on Python 3.9 runs the last 2.x, 2.24.1 (`a2c8433`), pinned, instead of main. A new job runs 3.0.0
+    (`1dc2f52`, pinned) on Python 3.11.
+  - *Re-pin.* `dependencies` changes, so video-production-agent sees the new range when it re-pins (agent side).

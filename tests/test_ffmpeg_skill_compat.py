@@ -67,10 +67,17 @@ def test_missing_required_flag_is_refused_whatever_the_version(tmp_path):
     assert any("audio_stream" in p for p in info.problems)
 
 
-def test_other_contract_version_is_a_warning_not_a_refusal(tmp_path):
+def test_ffmpeg_skill_3x_contract_version_2_is_known(tmp_path):
+    """ffmpeg-skill 3.x declares contract_version 2.0 (ADR-21): read like 1.0, no warning."""
     info = FfmpegSkill(_fake_skill(tmp_path / "s", _contract_doc("3.0.0", contract_version="2.0"))).info()
     assert info.supported, info.problems
-    assert any("contract_version 2.0" in w for w in info.warnings)
+    assert not any("contract_version" in w for w in info.warnings), info.warnings
+
+
+def test_other_contract_version_is_a_warning_not_a_refusal(tmp_path):
+    info = FfmpegSkill(_fake_skill(tmp_path / "s", _contract_doc("4.0.0", contract_version="3.0"))).info()
+    assert info.supported, info.problems
+    assert any("contract_version 3.0" in w for w in info.warnings)
 
 
 def test_doctor_reports_what_was_detected(tmp_path, skill_dir):
