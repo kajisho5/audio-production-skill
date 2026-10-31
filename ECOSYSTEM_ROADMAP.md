@@ -33,7 +33,7 @@ Agent plans 9 ops; MIX, SILENCE_REMOVE, NOISE_REDUCTION, DYNAMICS are executable
   - Done when: contract + unit tests
 - [x] **4. FILLER_REMOVE op** — caller-supplied word ranges (from transcript word timestamps); the skill cuts, never decides ([#25](https://github.com/kajisho5/audio-production-skill/pull/25))
   - Done when: sample-accurate fixture
-- [ ] **5. (agent side) plan MIX / NR / DYNAMICS / FILLER_REMOVE** — from explicit requirements
+- [x] **5. (agent side) plan MIX / NR / DYNAMICS / FILLER_REMOVE** — from explicit requirements (video-production-agent [#81](https://github.com/kajisho5/video-production-agent/pull/81) MIX / NOISE_REDUCTION / DYNAMICS, [#87](https://github.com/kajisho5/video-production-agent/pull/87) FILLER_REMOVE / MIX.duck)
   - Done when: tracked in video-production-agent
 
 ## Boundaries
