@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.7 - 2026-10-31
+
+- Tick roadmap step 5 (agent side done in video-production-agent #81 / #87) (#26) (78032ae)
+
 ## v0.4.6 - 2026-10-31
 
 - FILLER_REMOVE operation and MIX ducking (ECOSYSTEM_ROADMAP steps 4 and 2) (#25) (af4ff4a)
