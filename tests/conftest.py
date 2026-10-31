@@ -67,7 +67,7 @@ def run_cli(args, stdin_text=None, cwd=None):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(HERE.parent / "src") + os.pathsep + env.get("PYTHONPATH", "")
     env.setdefault("AUDIO_PRODUCTION_FFMPEG_SKILL_DIR", str(ffmpeg_skill_dir()))
-    proc = subprocess.run([sys.executable, "-m", "audio_production.cli", *args], input=stdin_text, capture_output=True, text=True, env=env, cwd=cwd)
+    proc = subprocess.run([sys.executable, "-m", "audio_production.cli", *args], input=stdin_text, capture_output=True, text=True, encoding="utf-8", env=env, cwd=cwd)
     return proc.returncode, proc.stdout, proc.stderr
 
 

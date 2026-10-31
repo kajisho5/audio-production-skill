@@ -167,3 +167,24 @@ def test_contract_check_cli_exit_codes(tmp_path):
     code, out, _ = run_cli(["contract", "--check", str(PINNED)])
     assert code == 0 and out.strip() == "contract check: ok"
     assert os.path.getsize(PINNED) > 1000
+
+
+def test_cli_io_is_utf8_whatever_the_console_code_page():
+    """A Windows console decodes / encodes through cp1252, which cannot represent a FILLER_REMOVE lexicon (えー). The
+    request is read as UTF-8 bytes and every JSON document is ASCII-only, so the narrow code page changes nothing."""
+    import subprocess
+    import sys
+    from pathlib import Path
+    from conftest import request_doc
+    env = dict(os.environ, PYTHONIOENCODING="cp1252", PYTHONUTF8="0")
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
+    proc = subprocess.run([sys.executable, "-m", "audio_production.cli", "skill", "--json"], capture_output=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.isascii() and json.loads(proc.stdout)["filler_lexicons"]["presets"]["ja"][0] == "えー"
+    doc = request_doc([{"op_id": "f", "type": "FILLER_REMOVE", "inputs": ["track:t1"],
+                        "parameters": {"words": [{"start": 0.0, "end": 0.5, "text": "えー、"}], "lexicon": {"presets": ["ja"], "words": ["あの"]}}}])
+    proc = subprocess.run([sys.executable, "-m", "audio_production.cli", "validate", "-", "--json"], input=json.dumps(doc, ensure_ascii=False).encode("utf-8"),
+                          capture_output=True, env=env)
+    out = json.loads(proc.stdout)
+    assert proc.returncode == 0 and out["ok"], proc.stderr
+    assert proc.stdout.isascii()

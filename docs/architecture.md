@@ -37,7 +37,8 @@ Source time and timeline time are separate. A track over a 6 s source starts as 
 `[1,2) ← [3,4)`. Gain / fades / normalisation / channel operations keep the mapping. MIX keeps every input's segments
 tagged with `input_index`, clipped to the first input's duration. Every artifact and every output therefore carries
 `output → operation → source → source range`. `SILENCE_REMOVE` applies `margin` and `min_duration` arithmetic to the
-caller's ranges first (`measurements.effective_ranges` records the result). CONCAT places inputs one after another,
+caller's ranges first (`measurements.effective_ranges` records the result); `FILLER_REMOVE` derives its ranges from
+the caller's word timings and lexicon (`fillers.py`, ADR-18) and records them the same way. CONCAT places inputs one after another,
 each shifted back by the crossfade, so overlapping parts carry both mappings (`input_index`).
 
 ## Operation graph and identity
@@ -59,9 +60,9 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
    `plan` / `--dry-run` stops here and returns the plan and planned results.
 4. Execute in topological order. Each node writes one PCM WAV intermediate named `<identity[:16]>.wav` next to a
    manifest `<identity[:16]>.json`; if both exist, the manifest matches the identity and input hashes and the file's
-   sha256 matches, the node is `reused`. TRIM / CUT / SILENCE_REMOVE run `ffmpeg-skill/cut --accurate` (sample
-   precision, recorded in `measurements.cut`). MIX folds pairwise through `ffmpeg-skill/audio --music` with `.mixN.wav`
-   sidecars; CONCAT is one `ffmpeg-skill/join` call; DYNAMICS one `ffmpeg-skill/audio` call with typed flags; VOICE_CLEANUP one `ffmpeg-skill/audio --voice` call (level form
+   sha256 matches, the node is `reused`. TRIM / CUT / SILENCE_REMOVE / FILLER_REMOVE run `ffmpeg-skill/cut --accurate`
+   (sample precision, recorded in `measurements.cut`). MIX folds pairwise through `ffmpeg-skill/audio --music` with
+   `.mixN.wav` sidecars (with `duck`, the ducked bed first, keyed by input 0, ADR-19); CONCAT is one `ffmpeg-skill/join` call; DYNAMICS one `ffmpeg-skill/audio` call with typed flags; VOICE_CLEANUP one `ffmpeg-skill/audio --voice` call (level form
    detected from the contract at planning, ADR-16).
    Sidecars are always removed; on failure the intermediate is removed too.
 5. Validate every intermediate: exists, size > 0, readable, probed audio stream, codec `pcm_s16le`, duration within

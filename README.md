@@ -57,8 +57,8 @@ FFmpeg (`ffmpeg` + `ffprobe`) on PATH for ffmpeg-skill. Install: `pip install -e
 | | [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) | [media-analysis-skill](https://github.com/kajisho5/media-analysis-skill) | **audio-production-skill** | [video-production-agent](https://github.com/kajisho5/video-production-agent) |
 |---|---|---|---|---|
 | Role | low-level media execution engine (hands) | measurement / observation (meters) | **audio production execution** (typed audio operations) | reasoning / decision / planning / orchestration (brain) |
-| Does | runs ffmpeg for cut, audio post, loudness, join, export, … | measures loudness, silence, streams, integrity | executes GAIN / TRIM / CUT / SILENCE_REMOVE / FADE / NORMALIZE / MIX / CONCAT / MONO / STEREO / DOWNMIX / NOISE_REDUCTION / DYNAMICS / VOICE_CLEANUP as a dependency graph, validates every artifact, records provenance | decides *whether* and *what* to process, builds the request |
-| Never | holds a project model | edits or writes media | measures for decisions, decides which ranges are silence, invents parameters, runs ffmpeg directly, accepts commands / filters | runs ffmpeg |
+| Does | runs ffmpeg for cut, audio post, loudness, join, export, … | measures loudness, silence, streams, integrity | executes GAIN / TRIM / CUT / SILENCE_REMOVE / FILLER_REMOVE / FADE / NORMALIZE / MIX (with ducking) / CONCAT / MONO / STEREO / DOWNMIX / NOISE_REDUCTION / DYNAMICS / VOICE_CLEANUP as a dependency graph, validates every artifact, records provenance | decides *whether* and *what* to process, builds the request |
+| Never | holds a project model | edits or writes media | measures for decisions, decides which ranges are silence, recognises speech, invents parameters, runs ffmpeg directly, accepts commands / filters | runs ffmpeg |
 
 - **audio-production-skill ≠ media-analysis-skill.** media-analysis-skill says "silence from 0.0 to 2.0 s, −23.1 LUFS".
   audio-production-skill only executes "remove [0.0, 2.0)", "normalise to −16 LUFS / −1.5 dBTP". The one measurement
@@ -180,6 +180,10 @@ used. It is a declaration for the registry; compatibility is still decided flag 
   `loudness_range_lu`, `tolerance_lufs` (verification), `sample_rate`, `profile` (label, recorded only) are optional.
 - **Silence**: `SILENCE_REMOVE` executes the caller's ranges with `margin` / `min_duration` arithmetic and records
   `threshold_db`; it never detects silence and never decides that a range is unwanted.
+- **Fillers**: `FILLER_REMOVE` cuts at word timings the caller supplies (`words`, or a `transcription-skill/transcript/0.1`
+  document as `transcript`) wherever a word matches the caller-chosen `lexicon` (`presets` `ja` / `en`, extra `words`,
+  `keep` exceptions; required, no default). It never transcribes; a transcript segment without word timestamps is
+  refused (`INVALID_REQUEST`, `reason: word_timestamps_missing`). See ADR-18.
 
 ### Output schema (`audio-production/response@1`)
 
@@ -220,9 +224,10 @@ Repository guide for future sessions: [CLAUDE.md](CLAUDE.md); current / experime
 | `TRIM` | 1 | `start`, `end` (source time) | `cut --start/--end --accurate` | keeps [start, end); sample-accurate, `measurements.cut.precision` |
 | `CUT` | 1 | `remove: [{start,end}]` sorted, non-overlapping | `cut --segments --accurate` (kept ranges) | sample-accurate |
 | `SILENCE_REMOVE` | 1 | `ranges`, `margin`, `min_duration`, `threshold_db` (recorded) | `cut --segments --accurate` | ranges come from the caller |
+| `FILLER_REMOVE` | 1 | `words: [{start, end, text}]` or `transcript` (one of), `lexicon {presets?, words?, keep?}` (required), `pad` [0, 0.5], `merge_gap` [0, 2], `declick_ms` [0, 200] | `cut --segments --accurate [--declick-ms]` | sample-accurate; matched words, ranges and removed seconds in `measurements.filler_remove`; `declick_ms` > 0 needs an ffmpeg-skill declaring `--declick-ms` (else `TOOL_ERROR` `ffmpeg_skill_flag_missing` at planning, ADR-18) |
 | `FADE_IN` / `FADE_OUT` | 1 | `duration` | `audio --fade-in/--fade-out` | |
 | `NORMALIZE` | 1 | `target_lufs`, `true_peak_db` (required), `loudness_range_lu`, `tolerance_lufs`, `sample_rate`, `profile` | `loudness -I/--tp/--lra/--sample-rate` | two-pass loudnorm, re-measured after |
-| `MIX` | 2..8 | `levels: [{gain_db, mute}]` | `audio --music/--music-volume` (pairwise fold) | duration = first input (amix `duration=first`) |
+| `MIX` | 2..8 | `levels: [{gain_db, mute}]`, `duck {input, amount_db, threshold_db?, attack_ms?, release_ms?}` | `audio --music/--music-volume` (pairwise fold), `--duck --duck-amount [--duck-threshold/--duck-attack/--duck-release]` | duration = first input (amix `duration=first`); `duck` lowers one bed under input 0 (sidechaincompress), other inputs are mixed un-ducked; undeclared duck flags → `TOOL_ERROR` `ffmpeg_skill_flag_missing` at planning (ADR-19) |
 | `MONO` | 1 | – | `audio --mono` | requires a 2-channel input |
 | `STEREO` | 1 | – | `audio --stereo` | requires a 1- or 2-channel input |
 | `DOWNMIX` | 1 | – | `audio --downmix` | requires 5.1 / 7.1 |
@@ -355,19 +360,25 @@ does). Measured on ffmpeg 6.1.1 / ffmpeg-skill 0.9.1, re-verified against ffmpeg
   `SILENCE_REMOVE.ranges` and `NORMALIZE` targets, chosen by the agent.
 - **video-production-agent** – the only intended caller: builds the request from its Decision / ProductionPlan,
   runs `audio-production run - --json`, reads `results` / `outputs` into its provenance and Artifact model.
-- **transcription-skill, video-editing-skill, QC** – not touched; this skill has no speech, video or final-QC role.
+- **transcription-skill** – its transcript word timestamps are the intended input of `FILLER_REMOVE` (passed in the
+  request; no code dependency, no speech recognition here).
+- **video-editing-skill, QC** – not touched; this skill has no video or final-QC role.
 
 ## Current limitations
 
 - `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS` and `VOICE_CLEANUP` take an `audio_stream`
   parameter (0-based, default 0) selecting which audio stream of their one input to process (ffmpeg-skill/audio
-  `--audio-stream`). `TRIM`, `CUT`, `SILENCE_REMOVE`, `NORMALIZE`, `MIX` and `CONCAT` always use the first audio
+  `--audio-stream`). `TRIM`, `CUT`, `SILENCE_REMOVE`, `FILLER_REMOVE`, `NORMALIZE`, `MIX` and `CONCAT` always use the first audio
   stream: ffmpeg-skill's `cut` / `loudness` / `join` tools have no `--audio-stream` flag, and `MIX` folds already-
   resolved inputs through `--music`, which always reads stream 0 of each bed file.
 - Every artifact's duration is validated within 0.1 s. Cuts are sample-accurate on PCM sources; on compressed
   sources the boundary depends on the decoder's priming handling (AAC: exact on ffmpeg 6.1, −12 ms on the Windows
   CI runner's FFmpeg), and CONCAT / MIX / export may differ by a codec frame (measured +8–10 ms with AAC sources).
-- Intermediates are 16-bit PCM WAV. MIX output duration follows the first input; per-input pan is not available.
+- Intermediates are 16-bit PCM WAV. MIX output duration follows the first input; per-input pan is not available;
+  `duck` lowers exactly one bed, keyed by input 0 (each fold is one ffmpeg-skill call keyed by its own main track).
+- `FILLER_REMOVE` word times are on its input's timeline (a transcript of the source fits an input that has not been
+  trimmed or cut before); matching is exact on normalised text, so a filler the transcript spells differently from
+  the lexicon is kept.
 - Loudness true-peak of a lossy output (`m4a`, `mp3`, …) may exceed the ceiling by the codec's overshoot; the
   verification happens on the PCM intermediate.
 - `doctor` reports core ffmpeg filters (`volume`, `afade`, `amix`, `pan`, `aformat`) as `unknown` because

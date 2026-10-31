@@ -461,3 +461,116 @@ def test_cleanup_policy_removes_intermediates_only_after_success(workspace):
     assert d["ok"] is False and d["cleanup"]["applied"] is False and list(workspace.glob(".audio-production/p1/*.json"))
     code, out, _ = run_cli(["run", "-", "--json", "--cleanup", "everything"], json.dumps(doc))
     assert code == 2 and "invalid choice" in _
+
+
+# ---- FILLER_REMOVE (ADR-18): sample-accurate removal at caller-supplied word timings
+FILLER_WORDS = [{"start": 0.0, "end": 1.0, "text": "本日は"}, {"start": 1.0, "end": 1.5, "text": "えー、"}, {"start": 1.5, "end": 3.0, "text": "症例を"},
+                {"start": 3.0, "end": 3.4, "text": "Um"}, {"start": 3.4, "end": 6.0, "text": "報告します"}]
+
+
+def samples(path):
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=duration_ts", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True, check=True)
+    return int(r.stdout.strip())
+
+
+def max_volume_dbfs(path):
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-af", "volumedetect", "-f", "null", "-"], capture_output=True, text=True)
+    return float(next(l for l in r.stderr.splitlines() if "max_volume" in l).split(":")[1].strip().split(" ")[0])
+
+
+def test_filler_remove_sample_accurate(workspace, skill_dir):
+    """fillers.wav is 0.1-amplitude "words" with two 0.5-amplitude "fillers" at 1.0-1.5 s and 3.0-3.4 s. Removing
+    exactly those leaves 244800 samples (5.1 s at 48 kHz) whose peak is the words' -20 dBFS: proof that the cut
+    points are where the caller's timings say, to the sample."""
+    src = [{"source_id": "a", "path": "fillers.wav"}]
+    doc = request_doc([op("f", "FILLER_REMOVE", ["track:t1"], words=FILLER_WORDS, lexicon={"presets": ["ja", "en"]}, declick_ms=0)], sources=src)
+    code, d = run(doc)
+    assert code == 0 and d["ok"], d.get("error")
+    out = workspace / "out" / "main.wav"
+    assert samples(out) == 244800
+    assert max_volume_dbfs(out) < -19.0                                   # both fillers (-6 dBFS) are gone
+    r = results(d)["op:f"]
+    assert r["tool"] == "ffmpeg-skill/cut" and r["measurements"]["cut"]["precision"] == "sample"
+    m = r["measurements"]["filler_remove"]
+    assert [x["text"] for x in m["matched"]] == ["えー、", "Um"] and m["removed_seconds"] == 0.9 and m["words_count"] == 5
+    assert r["measurements"]["effective_ranges"] == [{"start": 1.0, "end": 1.5}, {"start": 3.0, "end": 3.4}]
+    assert [(s["source"]["start"], s["source"]["end"]) for s in r["segments"]] == [(0.0, 1.0), (1.5, 3.0), (3.4, 6.0)]
+    chain = d["outputs"][0]["provenance"]["operations"]
+    assert any(c["type"] == "FILLER_REMOVE" and c["output_hash"] == r["artifact"]["sha256"] for c in chain)
+    # keep: "um" stays a word for this run, only えー goes
+    doc = request_doc([op("f", "FILLER_REMOVE", ["track:t1"], words=FILLER_WORDS, lexicon={"presets": ["ja", "en"], "keep": ["um"]})], sources=src)
+    code, d = run(doc)
+    assert d["ok"] and samples(workspace / "out" / "main.wav") == 264000, d.get("error")
+    # the same words as a transcription-skill transcript give the same cut
+    tr = {"schema": "transcription-skill/transcript/0.1", "id": "tr_x", "asset_id": "asset_x", "language": "ja", "duration": 6.0,
+          "segments": [{"id": "seg_0001", "start": 0.0, "end": 3.0, "text": "", "raw_text": "", "confidence": None, "words": FILLER_WORDS[:3], "speaker_id": None},
+                       {"id": "seg_0002", "start": 3.0, "end": 6.0, "text": "", "raw_text": "", "confidence": None, "words": FILLER_WORDS[3:], "speaker_id": None}]}
+    code, d = run(request_doc([op("f", "FILLER_REMOVE", ["track:t1"], transcript=tr, lexicon={"presets": ["ja", "en"]})], sources=src))
+    assert d["ok"] and samples(workspace / "out" / "main.wav") == 244800, d.get("error")
+    assert results(d)["op:f"]["parameters"]["transcript"]["id"] == "tr_x"
+    # no word timestamps: refused before any tool runs (dry run too), nothing written
+    tr["segments"][1]["words"] = None
+    for extra in ((), ("--dry-run",)):
+        code, d = run(request_doc([op("f", "FILLER_REMOVE", ["track:t1"], transcript=tr, lexicon={"presets": ["ja"]})], sources=src), *extra)
+        assert d["error"]["code"] == "INVALID_REQUEST" and d["error"]["details"]["reason"] == "word_timestamps_missing" and code == EXIT_CODES["INVALID_REQUEST"]
+        assert not (workspace / "out").exists()
+    # a word past the input's end: the times are on another timeline
+    code, d = run(request_doc([op("f", "FILLER_REMOVE", ["track:t1"], words=[{"start": 7.0, "end": 7.5, "text": "えー"}], lexicon={"presets": ["ja"]})], sources=src))
+    assert d["error"]["code"] == "INVALID_TIME_RANGE"
+
+
+def test_filler_remove_declick_is_detected(workspace, skill_dir):
+    """declick_ms > 0 runs where the located cut declares --declick-ms (fades, same sample count) and is refused at
+    planning where it does not (ffmpeg-skill 0.12.2), never silently dropped."""
+    from audio_production.adapter import FfmpegSkill
+    doc = request_doc([op("f", "FILLER_REMOVE", ["track:t1"], words=FILLER_WORDS, lexicon={"presets": ["ja", "en"]}, declick_ms=15)],
+                      sources=[{"source_id": "a", "path": "fillers.wav"}])
+    code, d = run(doc)
+    if FfmpegSkill(skill_dir).info().takes_flag("cut", "declick_ms"):
+        assert d["ok"] and samples(workspace / "out" / "main.wav") == 244800, d.get("error")
+        r = results(d)["op:f"]
+        assert r["measurements"]["filler_remove"]["declick_ms"] == 15.0 and r["measurements"]["cut"].get("declick_ms") == 15.0
+    else:
+        assert d["error"]["code"] == "TOOL_ERROR" and d["error"]["details"]["reason"] == "ffmpeg_skill_flag_missing", d
+        assert d["error"]["retryable"] is False and not (workspace / "out").exists()
+
+
+# ---- MIX.duck (ADR-19): the bed is lower while input 0 is above the threshold
+def band_level_dbfs(path, start, end, freq=440):
+    """mean_volume of the `freq` band of [start, end), via a cascaded band-pass (test-only measurement)."""
+    af = f"atrim={start}:{end},bandpass=f={freq}:width_type=q:w=8,bandpass=f={freq}:width_type=q:w=8,volumedetect"
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-af", af, "-f", "null", "-"], capture_output=True, text=True)
+    return float(next(l for l in r.stderr.splitlines() if "mean_volume" in l).split(":")[1].strip().split(" ")[0])
+
+
+def test_mix_ducks_the_bed_under_input_0(workspace, skill_dir):
+    """keyed.wav is a loud 1 kHz key only between 2..5 s; bed.wav a steady 440 Hz bed. Mixed without duck the bed
+    keeps its level throughout; with duck its 440 Hz band drops while the key sounds and is unchanged before it."""
+    srcs = [{"source_id": "k", "path": "keyed.wav"}, {"source_id": "b", "path": "bed.wav"}]
+    trks = [{"track_id": "t1", "source_id": "k"}, {"track_id": "t2", "source_id": "b"}]
+    outs = {}
+    for name, params in (("plain", {}), ("ducked", {"duck": {"input": 1, "amount_db": 24}})):
+        code, d = run(request_doc([op("m", "MIX", ["track:t1", "track:t2"], **params)], sources=srcs, tracks=trks,
+                                  outputs=[{"output_id": "o", "operation": "op:m", "path": f"out/{name}.wav", "format": "wav", "expect": {"duration": 6.0}}]))
+        assert d["ok"], d.get("error")
+        outs[name] = (workspace / "out" / f"{name}.wav").read_bytes()
+        (workspace / f"{name}.wav").write_bytes(outs[name])
+        if name == "ducked":
+            r = results(d)["op:m"]
+            assert r["measurements"]["duck"]["input"] == 1 and any("sidechaincompress" in c for c in r["tool_commands_observed"])
+    plain_pre, plain_on = band_level_dbfs(workspace / "plain.wav", 0.3, 1.7), band_level_dbfs(workspace / "plain.wav", 2.5, 4.5)
+    duck_pre, duck_on = band_level_dbfs(workspace / "ducked.wav", 0.3, 1.7), band_level_dbfs(workspace / "ducked.wav", 2.5, 4.5)
+    assert abs(plain_on - plain_pre) < 1.5, (plain_pre, plain_on)          # without duck the bed is steady
+    assert abs(duck_pre - plain_pre) < 1.5, (duck_pre, plain_pre)          # before the key: untouched
+    assert duck_on < plain_on - 6.0, (duck_on, plain_on)                    # under the key: lowered
+    # refusals: the key / the ducked bed muted (validation), a duck knob the located ffmpeg-skill does not declare (planning)
+    code, d = run(request_doc([op("m", "MIX", ["track:t1", "track:t2"], duck={"input": 1, "amount_db": 12}, levels=[{}, {"mute": True}])], sources=srcs, tracks=trks))
+    assert d["error"]["code"] == "INVALID_REQUEST"
+    from audio_production.adapter import FfmpegSkill
+    code, d = run(request_doc([op("m", "MIX", ["track:t1", "track:t2"], duck={"input": 1, "amount_db": 12, "threshold_db": -35, "release_ms": 200})],
+                              sources=srcs, tracks=trks), "--dry-run")
+    if FfmpegSkill(skill_dir).info().takes_flag("audio", "duck_threshold"):
+        assert d["ok"] and "--duck-threshold -35.000" in results(d)["op:m"]["measurements"]["duck"]["ffmpeg_skill_flags"], d.get("error")
+    else:
+        assert d["error"]["code"] == "TOOL_ERROR" and d["error"]["details"]["reason"] == "ffmpeg_skill_flag_missing", d

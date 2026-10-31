@@ -54,8 +54,10 @@ def test_optional_flags_are_detected_not_assumed(tmp_path):
     old = FfmpegSkill(_fake_skill(tmp_path / "old", _contract_doc("0.12.2", optional=False))).info()
     new = FfmpegSkill(_fake_skill(tmp_path / "new", _contract_doc("2.10.3", optional=True))).info()
     assert old.supported and new.supported
-    assert old.optional_flags() == {"audio": {"overwrite": False}, "loudness": {"measure_only": False}}
-    assert new.optional_flags() == {"audio": {"overwrite": True}, "loudness": {"measure_only": True}}
+    assert old.optional_flags() == {tool: {f: False for f in flags} for tool, flags in OPTIONAL_FLAGS_USED.items()}
+    assert new.optional_flags() == {tool: {f: True for f in flags} for tool, flags in OPTIONAL_FLAGS_USED.items()}
+    assert set(OPTIONAL_FLAGS_USED["audio"]) == {"overwrite", "duck", "duck_amount", "duck_threshold", "duck_attack", "duck_release"}
+    assert OPTIONAL_FLAGS_USED["cut"] == ("declick_ms",) and OPTIONAL_FLAGS_USED["loudness"] == ("measure_only",)
     assert not old.takes_flag("audio", "overwrite") and new.takes_flag("audio", "overwrite")
 
 
@@ -250,3 +252,102 @@ def test_detected_voice_levels_match_the_real_tool(skill_dir):
     else:
         assert "{" + ",".join(info.voice_levels()) + "}" in help_text
     assert doctor_report(str(skill_dir))["checks"]["ffmpeg_skill"]["voice_levels"] == info.voice_levels()
+
+
+# ---- MIX.duck and FILLER_REMOVE.declick_ms: optional flags, detected per run (ADR-18, ADR-19)
+def _contract_without(*flags, version="0.12.2"):
+    """A contract like 0.12.2's: the optional flags present except `flags` (tool.flag)."""
+    doc = _contract_doc(version)
+    for tf in flags:
+        tool, flag = tf.split(".")
+        for t in doc["tools"]:
+            if t["name"] == tool:
+                t["input_schema"]["properties"].pop(flag, None)
+    return doc
+
+
+def _plan_and_argv(skill_root: Path, workspace: Path, ops, n_sources=1):
+    from audio_production import executor
+    from audio_production.executor import Executor, NodeState
+    from audio_production.graph import OperationGraph
+    from audio_production.model import parse_request
+    from audio_production.security import PathPolicy
+    ex = Executor(PathPolicy(str(workspace)), FfmpegSkill(skill_root))
+    ids = "abcdefgh"[:n_sources]
+    sources = {k: {"source_id": k, "path": str(workspace / f"{k}.wav"), "sha256": "0" * 64, "size": 1, "duration": 6.0, "channels": 1, "sample_rate": 48000,
+                   "codec": "pcm_s16le", "channel_layout": None, "has_video": False} for k in ids}
+    req = parse_request(request_doc(ops, sources=[{"source_id": k, "path": f"{k}.wav"} for k in ids],
+                                    tracks=[{"track_id": f"t{i + 1}", "source_id": k} for i, k in enumerate(ids)]))
+    g = OperationGraph(req.project)
+    states = {n: NodeState(g.nodes[n]) for n in g.order}
+    for n in g.order:
+        ex._plan_node(states, states[n], sources)
+    for i, k in enumerate(ids):
+        states[f"track:t{i + 1}"].artifact = executor.Artifact(Path(sources[k]["path"]), 6.0, 1, 48000, "pcm_s16le", 1, "0" * 64)
+    last = f"op:{ops[-1]['op_id']}"
+    return states[last], ex._argv(states[last], states, sources, workspace / "o.wav")
+
+
+def _mix(duck, levels=None):
+    params = {"duck": duck}
+    if levels:
+        params["levels"] = levels
+    return [{"op_id": "m", "type": "MIX", "inputs": ["track:t1", "track:t2", "track:t3"], "parameters": params}]
+
+
+def test_duck_argv_follows_the_detected_flags(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    new = _fake_skill(tmp_path / "new", _contract_doc("2.22.4"))
+    st, calls = _plan_and_argv(new, ws, _mix({"input": 2, "amount_db": 18, "threshold_db": -30, "attack_ms": 10, "release_ms": 250},
+                                             levels=[{"gain_db": -2}, {"gain_db": -14}, {"gain_db": -20}]), 3)
+    a, b, c = (str(ws / f"{k}.wav") for k in "abc")
+    # the ducked bed (input 2) is folded first, keyed by input 0 alone; input 1 is summed afterwards, un-ducked
+    assert calls == [("audio", [a, "--music", c, "--music-volume", "-20.000", "--duck", "--duck-amount", "18.000", "--duck-threshold", "-30.000",
+                                "--duck-attack", "10.000", "--duck-release", "250.000", "--gain", "-2.000", "-o", str(ws / "o.mix1.wav")]),
+                     ("audio", [str(ws / "o.mix1.wav"), "--music", b, "--music-volume", "-14.000", "-o", str(ws / "o.wav")])]
+    assert st.measurements["duck"]["input"] == 2 and st.measurements["duck"]["key_input"] == 0 and "--duck-amount 18.000" in st.measurements["duck"]["ffmpeg_skill_flags"]
+    # 0.12.2 declares --duck / --duck-amount only: amount alone runs, a threshold is refused at planning
+    old = _fake_skill(tmp_path / "old", _contract_without("audio.duck_threshold", "audio.duck_attack", "audio.duck_release", "cut.declick_ms"))
+    st, calls = _plan_and_argv(old, ws, _mix({"input": 1, "amount_db": 12}), 3)
+    assert calls[0] == ("audio", [a, "--music", b, "--music-volume", "0.000", "--duck", "--duck-amount", "12.000", "-o", str(ws / "o.mix1.wav")])
+    from audio_production.errors import AudioError
+    with pytest.raises(AudioError) as ei:
+        _plan_and_argv(old, ws, _mix({"input": 1, "amount_db": 12, "release_ms": 200}), 3)
+    assert ei.value.code == "TOOL_ERROR" and ei.value.details["reason"] == "ffmpeg_skill_flag_missing" and ei.value.details["missing_flags"] == ["duck_release"]
+    assert ei.value.retryable is False
+    gone = _fake_skill(tmp_path / "gone", _contract_without("audio.duck", "audio.duck_amount"))
+    with pytest.raises(AudioError) as ei:
+        _plan_and_argv(gone, ws, _mix({"input": 1, "amount_db": 12}), 3)
+    assert ei.value.details["missing_flags"] == ["duck", "duck_amount"]
+    # a MIX without duck needs none of the duck flags
+    st, calls = _plan_and_argv(gone, ws, [{"op_id": "m", "type": "MIX", "inputs": ["track:t1", "track:t2"], "parameters": {}}], 2)
+    assert "--duck" not in calls[0][1]
+
+
+_WORDS = [{"start": 0.0, "end": 1.0, "text": "本日は"}, {"start": 1.0, "end": 1.5, "text": "えー"}, {"start": 1.5, "end": 3.0, "text": "症例を"},
+          {"start": 3.0, "end": 3.4, "text": "um"}, {"start": 3.4, "end": 6.0, "text": "報告します"}]
+
+
+def _fillers(**extra):
+    return [{"op_id": "f", "type": "FILLER_REMOVE", "inputs": ["track:t1"], "parameters": {"words": _WORDS, "lexicon": {"presets": ["ja", "en"]}, **extra}}]
+
+
+def test_filler_remove_argv_and_declick_detection(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    new = _fake_skill(tmp_path / "new", _contract_doc("2.22.4"))
+    old = _fake_skill(tmp_path / "old", _contract_without("cut.declick_ms"))
+    a = str(ws / "a.wav")
+    st, calls = _plan_and_argv(new, ws, _fillers())
+    assert calls == [("cut", [a, "--segments", "0.000-1.000,1.500-3.000,3.400-6.000", "--accurate", "-o", str(ws / "o.wav")])]
+    assert st.measurements["effective_ranges"] == [{"start": 1.0, "end": 1.5}, {"start": 3.0, "end": 3.4}]
+    assert st.measurements["filler_remove"]["matched_count"] == 2 and st.measurements["filler_remove"]["declick_ms"] is None
+    st, calls = _plan_and_argv(new, ws, _fillers(declick_ms=30))
+    assert calls[0][1][-4:] == ["--declick-ms", "30.000", "-o", str(ws / "o.wav")] and st.measurements["filler_remove"]["declick_ms"] == 30.0
+    st, calls = _plan_and_argv(old, ws, _fillers(declick_ms=0))               # 0 = butt joins: what an old cut does anyway
+    assert "--declick-ms" not in calls[0][1]
+    from audio_production.errors import AudioError
+    with pytest.raises(AudioError) as ei:
+        _plan_and_argv(old, ws, _fillers(declick_ms=20))
+    assert ei.value.code == "TOOL_ERROR" and ei.value.details["missing_flags"] == ["declick_ms"] and ei.value.details["tool"] == "ffmpeg-skill/cut"

@@ -14,10 +14,10 @@ v0.4.0, Python 3.9+ stdlib. 14 operations (GAIN, TRIM, CUT, SILENCE_REMOVE, FADE
 | Owned job | Status | Note |
 |---|---|---|
 | 音量・ラウドネス | done |  |
-| ミックス | partial | MIX has no pan, no ducking; ffmpeg-skill/audio --duck/--effects not exposed |
+| ミックス | partial | MIX ducks one bed under input 0 (ffmpeg-skill/audio --duck, #25); no per-input pan |
 | ダイナミクス | done |  |
 | 従来型ノイズ低減 | done | afftdn (NOISE_REDUCTION); ffmpeg-skill/audio --voice presets as VOICE_CLEANUP |
-| 無音・フィラー除去 | partial | silence removal for caller-given ranges; filler removal missing everywhere |
+| 無音・フィラー除去 | done | silence removal for caller-given ranges; FILLER_REMOVE at caller-supplied word timestamps (#25) |
 
 ## Wiring
 
@@ -27,11 +27,11 @@ Agent plans 9 ops; MIX, SILENCE_REMOVE, NOISE_REDUCTION, DYNAMICS are executable
 
 - [x] **1. Contract dependencies + split audio.fade** — dependency on ffmpeg-skill; audio.fade_in / audio.fade_out ids
   - Done when: OS dependency_version_ranges PASS
-- [ ] **2. MIX ducking / effects** — typed duck and effects params -> ffmpeg-skill/audio
+- [x] **2. MIX ducking / effects** — typed duck and effects params -> ffmpeg-skill/audio ([#25](https://github.com/kajisho5/audio-production-skill/pull/25); effects = un-ducked inputs, ADR-19)
   - Done when: music bed lower under speech (integration)
 - [x] **3. VOICE_CLEANUP op** — typed wrapper of ffmpeg-skill/audio --voice ([#22](https://github.com/kajisho5/audio-production-skill/pull/22))
   - Done when: contract + unit tests
-- [ ] **4. FILLER_REMOVE op** — caller-supplied word ranges (from transcript word timestamps); the skill cuts, never decides
+- [x] **4. FILLER_REMOVE op** — caller-supplied word ranges (from transcript word timestamps); the skill cuts, never decides ([#25](https://github.com/kajisho5/audio-production-skill/pull/25))
   - Done when: sample-accurate fixture
 - [ ] **5. (agent side) plan MIX / NR / DYNAMICS / FILLER_REMOVE** — from explicit requirements
   - Done when: tracked in video-production-agent

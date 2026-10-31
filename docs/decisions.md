@@ -135,3 +135,61 @@
   requests newly refused are ones that always failed, and video-production-agent already refused 10..19.99 itself
   (its ADR-063), so its `0.4.x` range check keeps accepting the release. VOICE_CLEANUP is unaffected (fixed `nf=-25`,
   ADR-16).
+- **ADR-18 FILLER_REMOVE cuts at caller-supplied word timings against a caller-chosen lexicon; it never transcribes.**
+  Filler removal belongs to this skill (`ecosystem.json`: "filler and silence removal"), speech recognition to
+  transcription-skill, so the operation takes the words with their times in the request: `words: [{start, end, text,
+  confidence?}]`, or a `transcription-skill/transcript/0.1` document as `transcript` (exactly one of the two; times on
+  the operation's input timeline). Missing timestamps are refused, never estimated: a word without `start` / `end`, no
+  words at all, or a transcript segment whose `words` is null (transcribed without word timestamps) is `INVALID_REQUEST`
+  with `details.reason: word_timestamps_missing` (the transcript case names the segments); a caller that accepts partial
+  coverage passes `words` for the segments that have them. From the transcript only `schema`, `segments[].words` and
+  the identifying `id` / `asset_id` / `language` are read (the rest is that skill's document, validated by it); the
+  effective parameters keep the extracted `words` plus that reference, so the identity depends on the words, not on
+  the transcript's unrelated fields. `lexicon {presets?, words?, keep?}` is required with no default (ADR-3): the
+  presets `ja` / `en` hold only hesitation sounds (えー, えーと, えっと, あのー, うーん, ... / um, uh, erm, hmm, ...);
+  words that are also ordinary words in running speech (あの, その, まあ, なんか, like) are left out because cutting them
+  cuts real sentences, and a caller adds them through `words` deliberately. Matching is exact on a normal form (NFKC,
+  case-folded, punctuation and whitespace dropped, ー / 〜 / ~ unified and collapsed); a run of up to 3 touching tokens
+  (gap <= 0.05 s) counts as one word because speech engines split Japanese into sub-word tokens ("えーと" as "えー" +
+  "と"), and the longest run wins. Each filler becomes `[start - pad, end + pad]` (`pad` 0..0.5, default 0), never
+  reaching into the neighbouring word; consecutive fillers with no word between them merge when at most `merge_gap`
+  apart (default 0: only touching ranges merge); a real word in the gap never merges. This is arithmetic on the
+  caller's data (`fillers.py`, pure), recorded in `measurements.filler_remove` (matched words, ranges, removed
+  seconds, effective lexicon) and `measurements.effective_ranges`. Lowering reuses the CUT path: `ffmpeg-skill/cut
+  --segments <kept ranges> --accurate`, sample-accurate (the integration fixture checks the exact sample count).
+  `declick_ms` maps to `cut --declick-ms` (fades at each join, no duration change: a fade-out / fade-in, not an
+  overlapping crossfade, so the kept audio stays sample-aligned); omitted, nothing is passed and ffmpeg-skill's own
+  behaviour applies (20 ms on releases with the flag, none on 0.12.2); `0` needs nothing; a value above 0 on an
+  ffmpeg-skill whose contract lacks `declick_ms` is refused at planning (`TOOL_ERROR`, `reason:
+  ffmpeg_skill_flag_missing`, `retryable: false`) instead of silently running butt joins. Rejected: running
+  ffmpeg-skill's own `silence --filler` (it also removes silences, decides with its own heuristics, and reads a file
+  rather than the request), and doing ASR here. Capability id `audio.filler_remove`; `keeps_timeline: false`.
+- **ADR-19 MIX ducks one bed under input 0 through `ffmpeg-skill/audio --duck`, detected from the contract.** The
+  roadmap's "MIX ducking / effects": `MIX.duck {input, amount_db, threshold_db?, attack_ms?, release_ms?}` names the
+  one input that is lowered (sidechaincompress keyed by input 0) — exactly what `--music X --duck` does in one
+  ffmpeg-skill call, where the key is that call's main track. The ducked bed is therefore folded first, with input 0
+  as the main track; the other inputs are summed afterwards un-ducked. `amix normalize=0` makes the sum independent
+  of the fold order, so that reordering changes nothing else. More than one ducked bed is not offered: a later fold's
+  main track already contains the first bed, so it could not be keyed by input 0 alone. Effects are the inputs that
+  are not ducked: ffmpeg-skill's `--effects` is the same graph (`volume`, then `amix normalize=0`, never ducked) as
+  one more `--music` fold, so it adds no capability here and is not emitted (one code path instead of two).
+  `amount_db` is required (ADR-3); threshold / attack / release left out keep ffmpeg-skill's defaults (-26.02 dBFS,
+  20 ms, 400 ms; fixed in 0.12.2), visible in the observed command. Ranges are those audio.py checks for
+  sidechaincompress (0..60 dB, -60..0 dBFS, 0.01..2000 ms, 0.01..9000 ms). Input 0 and the ducked input must be
+  unmuted (validation). All duck flags are optional flags (`OPTIONAL_FLAGS_USED`), because a MIX without duck needs
+  none and 0.12.2 declares only `--duck` / `--duck-amount`: a flag the request needs and the located contract does
+  not declare is refused at planning, dry run included, with `TOOL_ERROR` `ffmpeg_skill_flag_missing` and
+  `details.missing_flags` — never a version comparison (ADR-15), never a silently dropped knob. `measurements.duck`
+  records the parameters and the flags passed. MIX's `required_capabilities` are deliberately unchanged
+  (sidechaincompress is a core filter ffmpeg-skill's doctor does not list, like amix; and that list is a field
+  video-production-agent treats as fatal drift). Both changes are additive for the agent: a new operation and a new
+  optional MIX parameter (`parameters` is not in its fatal drift set), no change to `errors`, `request`,
+  `response`, `provenance` or `execution`; `tests/contract/contract.json` is regenerated and the release stays
+  `0.4.x` (no `feature` label), which video-production-agent's range check accepts.
+- **ADR-20 The CLI's JSON boundary is UTF-8 in and ASCII out, independent of the console code page.** FILLER_REMOVE
+  brought the first non-ASCII text into the contract (`filler_lexicons`) and into requests (えー). Windows consoles
+  encode stdio through cp1252, so `skill --json` crashed writing the contract and a request with Japanese words could
+  not be read (Windows CI). The request document is read from `sys.stdin.buffer` and decoded as UTF-8 (RFC 8259; a BOM
+  is tolerated, anything else is `INVALID_REQUEST`), and every JSON document is written with `ensure_ascii=True`
+  (non-ASCII as `\u` escapes), so any consumer parses the same document on any code page; human-readable output
+  uses `errors="backslashreplace"`. A caller must send the request as UTF-8 bytes.

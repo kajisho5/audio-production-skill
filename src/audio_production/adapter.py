@@ -16,8 +16,10 @@ Which ffmpeg-skill tools are used, and for what (docs/ffmpeg-skill.md):
   audio     GAIN, FADE_IN, FADE_OUT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP (each takes --audio-stream N,
             since ffmpeg-skill 0.9.1, to pick which audio stream of their one input to process; default 0; VOICE_CLEANUP's
             level is passed as `--voice <level>` when the contract declares the levels, else as the bare `--voice`), MIX
-            (--music, always stream 0 of each already-resolved input), format conversion / extraction
-  cut       TRIM (--start/--end), CUT / SILENCE_REMOVE (--segments = kept ranges), always --accurate (sample precision)
+            (--music, always stream 0 of each already-resolved input; MIX.duck adds --duck --duck-amount [--duck-threshold
+            --duck-attack --duck-release] to the call that folds the ducked bed), format conversion / extraction
+  cut       TRIM (--start/--end), CUT / SILENCE_REMOVE / FILLER_REMOVE (--segments = kept ranges), always --accurate
+            (sample precision); FILLER_REMOVE.declick_ms as --declick-ms
   loudness  NORMALIZE (-I/--tp/--lra/--sample-rate); verification reads the `result` field of that same call's
             --json response (ffmpeg-skill >= 0.12.0); only when a release has no `result` is the output measured by
             a second --measure-only call (detected from the contract, ADR-15)
@@ -63,8 +65,17 @@ FLAGS_USED: Dict[str, Tuple[str, ...]] = {
 #                          request set `overwrite: true`.
 #   loudness.measure_only  fallback verification for releases whose NORMALIZE --json has no `result` field
 #                          (before 0.12.0): the output is measured with a second, --measure-only call.
+#   audio.duck, audio.duck_amount
+#                          MIX.duck (sidechain ducking of one bed under input 0); a MIX without duck never needs them.
+#                          Absent: a MIX with duck is refused at planning (TOOL_ERROR ffmpeg_skill_flag_missing, ADR-19).
+#   audio.duck_threshold, audio.duck_attack, audio.duck_release
+#                          MIX.duck.threshold_db / attack_ms / release_ms (ffmpeg-skill >= 2.x; 0.12.2 has a fixed
+#                          threshold / attack / release); used only when the request sets them, refused if undeclared.
+#   cut.declick_ms         FILLER_REMOVE.declick_ms (fade at each --segments join); a value above 0 is refused at
+#                          planning when undeclared, 0 or omitted needs nothing (ADR-18).
 OPTIONAL_FLAGS_USED: Dict[str, Tuple[str, ...]] = {
-    "audio": ("overwrite",),
+    "audio": ("overwrite", "duck", "duck_amount", "duck_threshold", "duck_attack", "duck_release"),
+    "cut": ("declick_ms",),
     "loudness": ("measure_only",),
 }
 _ENV_KEEP = ("PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL", "TERM",

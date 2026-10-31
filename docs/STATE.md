@@ -5,12 +5,13 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 
 ## CURRENT (main)
 
-- Skill `audio-production` 0.4.0, contract `audio-production/contract@1`, one tool `audio-production/run`, 15
-  operation types (VOICE_CLEANUP added 2026-10-30, ADR-16); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
+- Skill `audio-production` 0.4.x, contract `audio-production/contract@1`, one tool `audio-production/run`, 16
+  operation types (VOICE_CLEANUP added 2026-10-30, ADR-16; FILLER_REMOVE and MIX `duck` 2026-10-31, ADR-18 / ADR-19); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
   `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS`, `VOICE_CLEANUP` take `audio_stream`
   (0-based, default 0) to pick which audio stream of their one input `ffmpeg-skill/audio` processes.
 - Execution through any ffmpeg-skill whose contract declares the required tools and flags — no version window
-  (ADR-15) — (`probe`, `audio`, `cut --accurate`, `loudness`, `join`); NORMALIZE verification reads the `result` field
+  (ADR-15) — (`probe`, `audio`, `cut --accurate`, `loudness`, `join`); MIX `duck` (`audio --duck*`) and FILLER_REMOVE
+  `declick_ms` (`cut --declick-ms`) are optional flags, refused at planning when the located contract lacks them; NORMALIZE verification reads the `result` field
   of the NORMALIZE call's own `--json` response (ADR-13), falling back to `--measure-only` only on a release without
   it; `--overwrite` is passed on export only when the installed ffmpeg-skill declares it.
 - CLI `skill | contract [--check [FILE|-]]`, `doctor`, `validate`, `plan`, `run` (`--cleanup keep|intermediates`) with
@@ -46,12 +47,17 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
    before a human confirms a publish actually ran.
 2. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
 
+3. video-production-agent does not plan FILLER_REMOVE or MIX `duck` yet (ECOSYSTEM_ROADMAP step 5, agent side): it
+   needs to re-pin the contract and lower transcript words / a ducking decision; its lowering currently refuses
+   non-ASCII strings and arrays longer than 32 items, which a filler lexicon (えー) and a transcript's words exceed.
+
 ## Known limitations (see README "Current limitations")
 
-`TRIM`/`CUT`/`SILENCE_REMOVE`/`NORMALIZE`/`MIX`/`CONCAT` always use the first audio stream (their ffmpeg-skill tools
+`TRIM`/`CUT`/`SILENCE_REMOVE`/`FILLER_REMOVE`/`NORMALIZE`/`MIX`/`CONCAT` always use the first audio stream (their ffmpeg-skill tools
 have no `--audio-stream`, or, for `MIX`, combine already-resolved inputs); artifact durations validated within 0.1 s
 (cuts sample-accurate on PCM, AAC sources up to one codec frame short on FFmpeg 8 / Windows); 16-bit PCM
-intermediates; MIX duration follows the first input; lossy outputs may overshoot the true-peak ceiling; core filters
+intermediates; MIX duration follows the first input and `duck` lowers one bed only; FILLER_REMOVE word times are on its
+input's timeline and matched exactly on normalised text; lossy outputs may overshoot the true-peak ceiling; core filters
 reported `unknown` by doctor; no eviction.
 
 ## OS integration status
@@ -110,3 +116,13 @@ reported `unknown` by doctor; no eviction.
   afftdn's range. `model.NOISE_REDUCTION_STRENGTH_DB = (20.0, 60.0)`. Change to a pinned operation's `parameters`
   (`tests/contract/contract.json` regenerated; video-production-agent must re-pin — it already refused 10..19.99 on its
   own, ADR-063 there); released as a fix (patch) by the release workflow. VOICE_CLEANUP not affected (fixed `nf=-25`).
+- 2026-10-31: FILLER_REMOVE (ECOSYSTEM_ROADMAP step 4, ADR-18) and MIX `duck` (step 2, ADR-19). FILLER_REMOVE takes
+  word timings (`words`, or a `transcription-skill/transcript/0.1` document as `transcript`) and a required `lexicon`
+  (presets `ja` / `en` + `words` - `keep`), computes padded / merged removal ranges in the new pure module `fillers.py`,
+  and runs `cut --segments --accurate` (sample-accurate fixture `fillers.wav`); missing word timestamps are refused
+  (`INVALID_REQUEST`, `word_timestamps_missing`); `declick_ms` → `cut --declick-ms`. MIX `duck {input, amount_db,
+  threshold_db?, attack_ms?, release_ms?}` folds the ducked bed first under input 0 with `audio --duck --duck-amount
+  [...]` (integration: the bed's 440 Hz band drops by more than 6 dB under the key, unchanged before it). New optional
+  flags `audio.duck*`, `cut.declick_ms`; capability id `audio.filler_remove`; top-level `filler_lexicons` (additive).
+  `tests/contract/contract.json` regenerated; additive for video-production-agent's fatal drift set (new operation, new
+  optional MIX parameter, `tools` / `ffmpeg_skill` changed); shipped as 0.4.x.
