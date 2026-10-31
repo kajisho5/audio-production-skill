@@ -626,9 +626,9 @@
         "strength_db": {
           "type": "number",
           "required": true,
-          "min": 10.0,
+          "min": 20.0,
           "max": 60.0,
-          "description": "noise floor to remove in dB"
+          "description": "noise floor to remove in dB (afftdn nf=-strength_db; afftdn accepts only -80..-20, hence 20..60)"
         },
         "audio_stream": {
           "type": "integer",

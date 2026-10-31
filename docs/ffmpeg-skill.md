@@ -113,5 +113,5 @@ Read from `scripts/audio.py` and `_contract.py --json --static` at 0.12.2 (`336e
 - afftdn's `nf` is only valid in [−80, −20] dB (FFmpeg 6.1 refuses `nf=-15` with "Numerical result out of range").
   The voice chains use a fixed `nf=-25`, so VOICE_CLEANUP cannot hit that limit; the integration test asserts every
   observed `afftdn=nf=` value lies in range. `--denoise-strength` maps to `nf=-<strength>` and ffmpeg-skill accepts
-  10..60, so a NOISE_REDUCTION `strength_db` below 20 reaches ffmpeg out of range — a separate gap of that operation
-  (docs/STATE.md).
+  10..60, so a NOISE_REDUCTION `strength_db` below 20 would reach ffmpeg out of range; NOISE_REDUCTION therefore
+  declares `strength_db` 20..60 and refuses 10..19.99 at validation with the reason (ADR-17).
