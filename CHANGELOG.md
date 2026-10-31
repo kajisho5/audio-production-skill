@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.6 - 2026-10-31
+
+- FILLER_REMOVE operation and MIX ducking (ECOSYSTEM_ROADMAP steps 4 and 2) (#25) (af4ff4a)
+
 ## v0.4.5 - 2026-10-31
 
 - fix: NOISE_REDUCTION strength_db minimum 20 (afftdn nf range) (#24) (2086430)
