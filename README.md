@@ -135,7 +135,7 @@ specification it follows lives on that repository's `main` (`docs/SPEC.md`, `doc
 are kept in sync with `docs/CAPABILITY_MATRIX.md` there.
 
 `dependencies` names the one Skill this one calls, in the OS registry's shape: `ffmpeg-skill` with a
-`version_range` of its `contract_version` (`>=1.0 <2.0`, `range_of: "contract_version"`) and the ffmpeg-skill tools
+`version_range` of its `contract_version` (`>=1.0 <3.0`: 1.0 up to ffmpeg-skill 2.x, 2.0 in 3.x; `range_of: "contract_version"`) and the ffmpeg-skill tools
 used. It is a declaration for the registry; compatibility is still decided flag by flag (ADR-15).
 
 ### Input schema (`audio-production/request@1`)

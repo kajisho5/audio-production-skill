@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from . import CONTRACT_SCHEMA_VERSION, DOCTOR_SCHEMA_VERSION, PACKAGE_NAME, REQUEST_SCHEMA_VERSION, RESPONSE_SCHEMA_VERSION, SKILL_ID, VERSION
-from .adapter import FLAGS_USED, OPTIONAL_FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
+from .adapter import FLAGS_USED, KNOWN_CONTRACT_VERSIONS, OPTIONAL_FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
 from .executor import CLEANUP_POLICIES, DURATION_TOLERANCE, TOOL_FOR, WORK_DIR_NAME
 from .fillers import LEXICON_PRESETS, MAX_RUN_TOKENS, RUN_MAX_GAP
@@ -37,8 +37,9 @@ def capability_provides() -> List[Dict[str, str]]:
 
 
 # The AI Video Production OS registry's `dependencies`: ffmpeg-skill, as a range of its contract_version (the one
-# version this adapter reads; ADR-15: what is actually needed is checked flag by flag, not by package version).
-FFMPEG_SKILL_CONTRACT_RANGE = f">={SUPPORTED_CONTRACT_VERSION} <{int(SUPPORTED_CONTRACT_VERSION.split('.')[0]) + 1}.0"
+# versions this adapter reads: 1.0 up to ffmpeg-skill 2.x, 2.0 for 3.x, ADR-21; ADR-15: what is actually needed is
+# checked flag by flag, not by package version).
+FFMPEG_SKILL_CONTRACT_RANGE = f">={SUPPORTED_CONTRACT_VERSION} <{int(KNOWN_CONTRACT_VERSIONS[-1].split('.')[0]) + 1}.0"
 
 
 def dependencies() -> List[Dict[str, Any]]:

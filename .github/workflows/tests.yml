@@ -21,7 +21,18 @@ jobs:
         os: [ubuntu-latest]
         python: ["3.9", "3.11"]
         ffmpeg_skill: ["336e0c4d6311d2407daaa529ad71fee641f59b37", "main"]
+        # ffmpeg-skill 3.0 requires Python 3.10+: Python 3.9 runs the last 2.x (2.24.1, pinned) instead of main, and
+        # 3.0.0 (pinned) has its own job (ADR-21)
+        exclude:
+          - python: "3.9"
+            ffmpeg_skill: "main"
         include:
+          - os: ubuntu-latest
+            python: "3.9"
+            ffmpeg_skill: "a2c8433b2441b52b4fe16ce3525100d892ee047f"
+          - os: ubuntu-latest
+            python: "3.11"
+            ffmpeg_skill: "1dc2f52013956daa1d97fd9d9d53c79b9305bc43"
           - os: windows-latest
             python: "3.11"
             ffmpeg_skill: "336e0c4d6311d2407daaa529ad71fee641f59b37"

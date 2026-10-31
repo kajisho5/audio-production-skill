@@ -42,9 +42,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .errors import AudioError
 
-# The ffmpeg-skill contract_version this adapter was written against. Reported, not gated on: ffmpeg-skill kept
-# "1.0" across 0.x, 1.x and 2.x, and what this skill actually needs is checked flag by flag below (ADR-15).
-SUPPORTED_CONTRACT_VERSION = "1.0"
+# The ffmpeg-skill contract_version values this adapter reads: "1.0" (0.x, 1.x and 2.x) and "2.0" (3.x, whose bump
+# changed only cut.py's `precision` / `keyframe_snapped` meaning for copied parts -- this skill always passes --accurate,
+# so every part is re-encoded and both meanings agree; ADR-21). Reported, not gated on: what this skill actually needs
+# is checked flag by flag below (ADR-15). SUPPORTED_CONTRACT_VERSION is the oldest, where the registry range starts.
+KNOWN_CONTRACT_VERSIONS = ("1.0", "2.0")
+SUPPORTED_CONTRACT_VERSION = KNOWN_CONTRACT_VERSIONS[0]
 ENV_DIR_KEYS = ("AUDIO_PRODUCTION_FFMPEG_SKILL_DIR", "VIDEO_AGENT_FFMPEG_SKILL_DIR")
 TOOLS_USED = ("probe", "audio", "cut", "loudness", "join")
 # flags of the ffmpeg-skill input_schema this adapter emits; checked against the live contract in doctor
@@ -231,8 +234,8 @@ class FfmpegSkill:
             problems.append(f"cannot read ffmpeg-skill contract: {getattr(e, 'message', str(e))}")
         warnings: List[str] = []
         # No version window: the version string is reported as found, and compatibility is the flag check below.
-        if contract_version != "unknown" and contract_version.split(".")[0] != SUPPORTED_CONTRACT_VERSION.split(".")[0]:
-            warnings.append(f"ffmpeg-skill contract_version {contract_version} differs from {SUPPORTED_CONTRACT_VERSION}; "
+        if contract_version != "unknown" and contract_version.split(".")[0] not in {v.split(".")[0] for v in KNOWN_CONTRACT_VERSIONS}:
+            warnings.append(f"ffmpeg-skill contract_version {contract_version} is not one of {', '.join(KNOWN_CONTRACT_VERSIONS)}; "
                             "compatibility was decided by the tool / flag check, not by this number")
         for tool, flags in FLAGS_USED.items():
             spec = tools.get(tool)
