@@ -39,6 +39,19 @@ Agent plans MIX (and duck), NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP and FILLER_
   - Done when: CI passes against 3.0.0 and the range includes it
 - [ ] **7. Mastering matched to a reference** — new op `MATCH_REFERENCE`: measure a reference track the user supplies (integrated loudness, loudness range, true peak, the average spectrum in fixed bands, stereo width) and the target the same way, then build the corrections: a smooth EQ curve limited to a stated maximum gain per band, then loudness and a true-peak limiter to the reference's level or to the delivery target, whichever the caller names. Every stage runs through ffmpeg-skill `audio` / `loudness`; if the engine has no general EQ, the op is refused with the missing flag and that gap is handed to ffmpeg-skill. The report lists the reference's numbers, the target's numbers before and after, and every band's gain. 参考：matchering（考え方のみ。コードは使わない）
   - Done when: a fixture whose target is the reference with a tilt EQ and -6 dB ends within 1 dB per band and 0.5 LU of the reference; a reference with clipping is reported, not copied; the true peak never exceeds the limit
+- [ ] **8. Stems and multitrack delivery** — STEMS: from the MIX inputs, write dialogue, music and effects as separate files, or as one multitrack WAV / MOV with named tracks, all of the programme's length and aligned to its first sample. Field review 2026-11-05 (Velisa ROADMAP, third round)
+  - なぜ要るか：MA・放送局・海外版の作業で求められるステム納品に、そのまま応えられる
+  - Needs: Velisa ROADMAP, Proposals to ffmpeg-skill (multitrack audio) for one multitrack file; separate files work without it
+  - Done when: the stems summed equal the mix within -60 dB residual; every stem has the programme's sample count
+- [ ] **9. Loudness versions in one run** — LOUDNESS_SET: one master into several versions, each measured and true-peak limited: -14 LUFS (streaming), -23 LUFS / -1 dBTP (EBU R128), -24 LKFS / -1 dBTP (ARIB TR-B32), or stated targets; each version's measurement is in the result
+  - なぜ要るか：配信用と放送用の音を、取り違えずに一度に出せる
+  - Done when: three versions of a fixture are within 0.5 LU of their targets and never exceed their true-peak limit
+- [ ] **10. Automixer for panel microphones** — AUTOMIX: several mic tracks of one discussion mixed by gain sharing (each mic's gain follows its share of the total level) with a number-of-open-mics attenuation, so only the talking mics are open; a fixed mic (the chair) can be pinned
+  - なぜ要るか：学会のパネルや座談会で、話していないピンマイクのノイズと被りを自動で抑えられる
+  - Done when: a 3-mic fixture where one person speaks at a time keeps the other two at least 10 dB down, and no level jump exceeds a stated rate
+- [ ] **11. Per-input pan and language tracks** — MIX takes a pan per input, and a `languages` mode writes one mix per language (floor sound plus that language's interpreter or dub) as separate tracks with language tags
+  - なぜ要るか：同時通訳の言語別音声や、吹替版と原音の両方を一つの納品にまとめられる
+  - Done when: a fixture with ja and en interpreters gives two tagged tracks, each with the floor sound under its interpreter
 
 ## Boundaries
 
