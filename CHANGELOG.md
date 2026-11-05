@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.9 - 2026-11-05
+
+- docs(roadmap): step 7 (mastering matched to a reference) and review (#28) (300363e)
+
 ## v0.4.8 - 2026-10-31
 
 - fix: accept ffmpeg-skill 3.0.0 (contract_version 2.0); Python 3.9 CI on the last 2.x (#27) (b1ac5cd)
