@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.10 - 2026-11-05
+
+- docs(roadmap): field review steps 8-11 (2026-11-05) (#29) (5dc7c45)
+
 ## v0.4.9 - 2026-11-05
 
 - docs(roadmap): step 7 (mastering matched to a reference) and review (#28) (300363e)
