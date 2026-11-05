@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-v0.4.0, Python 3.9+ stdlib. 14 operations (GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN/OUT, NORMALIZE, MIX, CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS). 83 tests, CI on 3 OSes against ffmpeg-skill pinned + main.
+v0.4.8, Python 3.9+ stdlib. Operations: GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN/OUT, NORMALIZE, MIX (with duck), CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP (step 3), FILLER_REMOVE (step 4). CI on 3 OSes against ffmpeg-skill pinned + main; ffmpeg-skill 3.x accepted (step 6).
 
 ## What this repository owns
 
@@ -21,7 +21,7 @@ v0.4.0, Python 3.9+ stdlib. 14 operations (GAIN, TRIM, CUT, SILENCE_REMOVE, FADE
 
 ## Wiring
 
-Agent plans 9 ops; MIX, SILENCE_REMOVE, NOISE_REDUCTION, DYNAMICS are executable but never planned. Delegates to ffmpeg-skill probe, audio, cut, loudness, join.
+Agent plans MIX (and duck), NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP and FILLER_REMOVE from explicit requirements (step 5); pinned at 0.4.8. Delegates to ffmpeg-skill probe, audio, cut, loudness, join.
 
 ## Steps
 
@@ -37,10 +37,12 @@ Agent plans 9 ops; MIX, SILENCE_REMOVE, NOISE_REDUCTION, DYNAMICS are executable
   - Done when: tracked in video-production-agent
 - [x] **6. ffmpeg-skill 3.0.0** — accept its contract_version 2.0; Python 3.9 CI against the last 2.x (ADR-21) ([#27](https://github.com/kajisho5/audio-production-skill/pull/27))
   - Done when: CI passes against 3.0.0 and the range includes it
+- [ ] **7. Mastering matched to a reference** — new op `MATCH_REFERENCE`: measure a reference track the user supplies (integrated loudness, loudness range, true peak, the average spectrum in fixed bands, stereo width) and the target the same way, then build the corrections: a smooth EQ curve limited to a stated maximum gain per band, then loudness and a true-peak limiter to the reference's level or to the delivery target, whichever the caller names. Every stage runs through ffmpeg-skill `audio` / `loudness`; if the engine has no general EQ, the op is refused with the missing flag and that gap is handed to ffmpeg-skill. The report lists the reference's numbers, the target's numbers before and after, and every band's gain. 参考：matchering（考え方のみ。コードは使わない）
+  - Done when: a fixture whose target is the reference with a tilt EQ and -6 dB ends within 1 dB per band and 0.5 LU of the reference; a reference with clipping is reported, not copied; the true peak never exceeds the limit
 
 ## Boundaries
 
 Classic noise reduction here vs AI voice isolation in voice-enhance-skill: clean split. sound-design and dubbing outputs are placed through MIX here.
 
 ---
-Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (42 tools, treated as complete). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
+Engine for every media operation: [ffmpeg-skill](https://github.com/kajisho5/ffmpeg-skill) (3.x, 42 tools, contract_version 2.0; treated as complete, proposals go to Velisa's ROADMAP). Orchestrator: [video-production-agent](https://github.com/kajisho5/video-production-agent).
