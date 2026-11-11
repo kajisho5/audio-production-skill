@@ -1,9 +1,5 @@
 # Changelog
 
-## v1.0.0 - 2026-11-11
-
-- build(deps): bump release-drafter/release-drafter from 6.4.0 to 7.10.0 (#30) (eea24eb)
-
 ## v0.4.10 - 2026-11-05
 
 - docs(roadmap): field review steps 8-11 (2026-11-05) (#29) (5dc7c45)
