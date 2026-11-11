@@ -211,7 +211,7 @@
     the CI job on Python 3.9 runs the last 2.x, 2.24.1 (`a2c8433`), pinned, instead of main. A new job runs 3.0.0
     (`1dc2f52`, pinned) on Python 3.11.
   - *Re-pin.* `dependencies` changes, so video-production-agent sees the new range when it re-pins (agent side).
-- **ADR-22 Releases: a Dependabot pull request cannot raise the release level; v1.0.0 was withdrawn.** #30 (a
+- **ADR-22 Releases: a Dependabot pull request cannot raise the release level; v1.0.0 stays.** #30 (a
   Dependabot bump of release-drafter from 6.4.0 to 7.10.0) was merged carrying the label `major`. Dependabot puts
   that label on a pull request whose *dependency* moved a major version, as soon as a label named `major` exists
   in the repository; `.github/release-drafter.yml` maps the same label to a major bump of this product, so the
@@ -227,9 +227,8 @@
     stop the semver label added on top, and a later edit of that file would reopen the hole unnoticed. Removing the
     label when it is applied (in `autolabel.yml`): a missed or failed run would go unnoticed until the next
     accidental release.
-  - *Withdrawal.* v1.0.0 (tag and GitHub Release; nothing was published to a package registry) is deleted by the
-    owner. `pyproject.toml`, `src/audio_production/__init__.py` and `tests/contract/contract.json` say 0.4.11 and
-    the v1.0.0 CHANGELOG entry is removed: with the newest tag back at v0.4.10, `compute_version.sh` takes its
-    manual path (the version is already ahead of the latest tag), releases exactly 0.4.11 whatever the labels say,
-    and `render_changelog.sh` writes the 0.4.11 CHANGELOG entry. No pinned contract block changed besides `version`.
+  - *v1.0.0 stays.* It was not meant as a major release (no breaking change went into it), but its tag and GitHub
+    Release are public, so it is kept and the 1.x line continues from it; the version files and the v1.0.0
+    CHANGELOG entry are unchanged. From here on a major release happens only when a person applies the label.
   - *Tests.* `tests/test_release_labels.py`.
+  - *Release.* A patch release (1.0.1).
