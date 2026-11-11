@@ -58,5 +58,6 @@ audio-production contract --check tests/contract/contract.json --json
   version from PR labels unless `pyproject.toml`'s current version is already ahead of the latest tag (a manual
   bump per the rule above is always respected, never overwritten). Label a PR `major`/`breaking`,
   `minor`/`feature`/`enhancement`, or `patch`/`fix`/`bug`/`chore`/`documentation` (`.github/workflows/autolabel.yml`
-  usually does this from the title/branch/files automatically); unlabeled defaults to patch. Don't hand-edit
+  usually does this from the title/branch/files automatically); unlabeled defaults to patch. On a Dependabot PR a
+  `major`/`minor`-level label counts only when a person applied it (ADR-22). Don't hand-edit
   `CHANGELOG.md` — the release workflow generates it from `git log` every run.
