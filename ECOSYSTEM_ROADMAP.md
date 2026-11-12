@@ -5,7 +5,7 @@ Written from a read-only audit of this repository on 2026-10-30. Each step below
 
 ## Where it stands
 
-v0.4.8, Python 3.9+ stdlib. Operations: GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN/OUT, NORMALIZE, MIX (with duck), CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP (step 3), FILLER_REMOVE (step 4). CI on 3 OSes against ffmpeg-skill pinned + main; ffmpeg-skill 3.x accepted (step 6).
+v1.2.0, Python 3.9+ stdlib. Operations: GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN/OUT, NORMALIZE, MIX (with duck), CONCAT, MONO, STEREO, DOWNMIX, NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP (step 3), FILLER_REMOVE (step 4). CI on 3 OSes against ffmpeg-skill pinned + main; ffmpeg-skill 3.x accepted (step 6).
 
 ## What this repository owns
 
@@ -13,7 +13,7 @@ v0.4.8, Python 3.9+ stdlib. Operations: GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN
 
 | Owned job | Status | Note |
 |---|---|---|
-| 音量・ラウドネス | done |  |
+| 音量・ラウドネス | done | owned here; ffmpeg-skill `loudness` is the engine underneath ([Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/blob/main/docs/ecosystem/DECISION_LOG.md)) |
 | ミックス | partial | MIX ducks one bed under input 0 (ffmpeg-skill/audio --duck, #25); no per-input pan |
 | ダイナミクス | done |  |
 | 従来型ノイズ低減 | done | afftdn (NOISE_REDUCTION); ffmpeg-skill/audio --voice presets as VOICE_CLEANUP |
@@ -21,7 +21,7 @@ v0.4.8, Python 3.9+ stdlib. Operations: GAIN, TRIM, CUT, SILENCE_REMOVE, FADE_IN
 
 ## Wiring
 
-Agent plans MIX (and duck), NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP and FILLER_REMOVE from explicit requirements (step 5); pinned at 0.4.8. Delegates to ffmpeg-skill probe, audio, cut, loudness, join.
+Agent plans MIX (and duck), NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP and FILLER_REMOVE from explicit requirements (step 5); pinned at 1.2.0. Delegates to ffmpeg-skill probe, audio, cut, loudness, join.
 
 ## Steps
 
@@ -52,6 +52,10 @@ Agent plans MIX (and duck), NOISE_REDUCTION, DYNAMICS, VOICE_CLEANUP and FILLER_
 - [ ] **11. Per-input pan and language tracks** — MIX takes a pan per input, and a `languages` mode writes one mix per language (floor sound plus that language's interpreter or dub) as separate tracks with language tags
   - なぜ要るか：同時通訳の言語別音声や、吹替版と原音の両方を一つの納品にまとめられる
   - Done when: a fixture with ja and en interpreters gives two tagged tracks, each with the floor sound under its interpreter
+- [ ] **12. Loudness: owner and engine written down** — this repository owns 音量・ラウドネス and ffmpeg-skill is the engine (NORMALIZE and LOUDNESS_SET run through ffmpeg-skill `loudness`) ([Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/blob/main/docs/ecosystem/DECISION_LOG.md)). The agent's video path keeps calling `ffmpeg-skill/loudness`; that routing changes only after a measured comparison of `loudnorm` and `ebur128` (video-production-agent step 34)
+  - Done when: README and SKILL.md say who owns loudness and which engine runs it, and the comparison is linked here once it is committed
+- [ ] **13. Two Japanese filler lists** — FILLER_REMOVE's `ja` preset (`fillers.py:26`) and ffmpeg-skill `silence --filler`'s built-in list (`_common/decision.py:1630-1640`) differ. ffmpeg-skill's list has あの・その・まあ・なんか; this preset leaves them out on purpose, because they are also content words ("あの人", "その", `fillers.py:23`), and has あー・うーん・んー instead. Decide whether to align: keep both and say why, add the four words as an opt-in preset here, or ask ffmpeg-skill to change its list (a new request, since ffmpeg-skill is treated as complete). The agent does not use `silence --filler`
+  - Done when: an ADR records the choice; if a preset is added, a fixture with each of the four words used as a filler and as a content word shows which are cut
 
 ## Boundaries
 
