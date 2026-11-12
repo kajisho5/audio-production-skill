@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.2.0 - 2026-11-12
+
+- feat: STEMS, stem files that sum to the mix (roadmap step 8) (#33) (4efb06f)
+
 ## v1.1.0 - 2026-11-12
 
 - feat: LOUDNESS_SET, several delivery loudness versions in one run (roadmap step 9) (#32) (5694443)
