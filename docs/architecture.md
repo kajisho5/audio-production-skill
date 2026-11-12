@@ -76,6 +76,8 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
 6. Export every output with `ffmpeg-skill/audio` to a staging file next to its target (`.<name>.staged<ext>`) in the
    requested format and validate it against `expect`; the targets are replaced only once every output passed. An output
    of a LOUDNESS_SET version is measured again (`loudness --measure-only`) and summarised in `loudness_sets`.
+   A STEMS operation expands into one `STEM` node per stem (`op:<op_id>.<stem_id>`) that reads every input (input 0
+   sets the programme's length); its sample count is checked against input 0's and summarised in `stems` (ADR-24).
 7. Return one response document: `ok`, `status`, `plan`, `results`, `outputs` (with provenance), `tool_runs`,
    `error?`. On the first failure the remaining nodes are `skipped`; on SIGINT / SIGTERM the running tool's process
    group is killed and the status is `cancelled`.

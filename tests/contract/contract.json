@@ -7,7 +7,7 @@
   "version": "1.1.0",
   "kind": "execution",
   "role": "audio production (processing); not measurement, not decision",
-  "description": "Deterministic audio production execution: gain, sample-accurate trim / cut, silence removal (explicit ranges), filler removal (caller-supplied word timings), fades, EBU R128 loudness normalisation, several delivery loudness versions in one run, mix (with sidechain ducking), concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), speech clean-up presets, format conversion and audio extraction from video containers; typed operation graph in, validated artifacts with provenance out. Not an AI agent.",
+  "description": "Deterministic audio production execution: gain, sample-accurate trim / cut, silence removal (explicit ranges), filler removal (caller-supplied word timings), fades, EBU R128 loudness normalisation, several delivery loudness versions in one run, stems (dialogue / music / effects files that sum to the mix), mix (with sidechain ducking), concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), speech clean-up presets, format conversion and audio extraction from video containers; typed operation graph in, validated artifacts with provenance out. Not an AI agent.",
   "repository": "https://github.com/kajisho5/audio-production-skill",
   "not_provided": [
     "AI reasoning",
@@ -50,6 +50,7 @@
         "NOISE_REDUCTION",
         "NORMALIZE",
         "SILENCE_REMOVE",
+        "STEMS",
         "STEREO",
         "TRIM",
         "VOICE_CLEANUP"
@@ -156,6 +157,12 @@
       "lifecycle": "EXPERIMENTAL",
       "tool_id": "audio-production/run",
       "operation": "SILENCE_REMOVE"
+    },
+    {
+      "id": "audio.stems",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "STEMS"
     },
     {
       "id": "audio.stereo",
@@ -1122,6 +1129,82 @@
       "deterministic": "content_equivalent"
     },
     {
+      "type": "STEMS",
+      "description": "Write the inputs of a mix as separate stem files (e.g. dialogue, music, effects), each the programme's length (input 0's duration, as MIX) and aligned to its first sample; every input belongs to exactly one stem, so the stems summed equal a MIX of the same inputs and levels. A stem is referenced as op:<op_id>.<stem_id> (the set itself is not an artifact)",
+      "inputs": {
+        "min": 2,
+        "max": 8
+      },
+      "parameters": {
+        "stems": {
+          "type": "array",
+          "required": true,
+          "description": "1..8 stems: {stem_id, inputs: [input index], role?: ['dialogue', 'music', 'effects', 'other']}; every input index in exactly one stem",
+          "min_items": 1,
+          "max_items": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "stem_id": {
+                "type": "string"
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "min": 0
+                }
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "dialogue",
+                  "music",
+                  "effects",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "stem_id",
+              "inputs"
+            ],
+            "additionalProperties": false,
+            "rule": "every input index in exactly one stem"
+          }
+        },
+        "levels": {
+          "type": "array",
+          "required": false,
+          "description": "per-input {gain_db}, aligned with inputs, as the MIX they sum to (omit: 0 dB); mute is not accepted (a muted input belongs to no stem: leave it out of the inputs)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "gain_db": {
+                "type": "number",
+                "min": -60,
+                "max": 60
+              },
+              "mute": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:amix"
+      ],
+      "keeps_timeline": false,
+      "deterministic": "content_equivalent"
+    },
+    {
       "type": "CONCAT",
       "description": "Concatenate 2..32 inputs in order (ffmpeg concat), optional equal-power crossfade",
       "inputs": {
@@ -1442,7 +1525,8 @@
         "duck_amount",
         "duck_threshold",
         "duck_attack",
-        "duck_release"
+        "duck_release",
+        "replace"
       ],
       "cut": [
         "declick_ms"

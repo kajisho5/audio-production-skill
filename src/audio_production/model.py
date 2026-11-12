@@ -55,7 +55,12 @@ TRANSCRIPT_SCHEMA = "transcription-skill/transcript/0.1"   # the transcript docu
 
 # ---- parameter schemas: name -> {type, required, min, max, enum, description}
 _NUM, _INT, _BOOL, _STR, _RANGES, _LEVELS, _STAGE = "number", "integer", "boolean", "string", "ranges", "levels", "stage"
-_DUCK, _WORDS, _TRANSCRIPT, _LEXICON, _VERSIONS = "duck", "words", "transcript", "lexicon", "loudness_versions"
+_DUCK, _WORDS, _TRANSCRIPT, _LEXICON, _VERSIONS, _STEMS = "duck", "words", "transcript", "lexicon", "loudness_versions", "stems"
+
+# STEMS: the inputs of a mix grouped into stems written as separate files, each of the programme's length (input 0's
+# duration, as MIX) and aligned to its first sample, so the stems summed are the mix (same levels, no ducking)
+STEM_ROLES = ("dialogue", "music", "effects", "other")
+MAX_STEMS = 8
 
 # LOUDNESS_SET: delivery loudness profiles a version may name instead of stating its own target. International
 # standards first; a regional profile is listed beside them and is only ever used when a version names it (there is
@@ -213,6 +218,11 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
         "versions": {"type": _VERSIONS, "required": True, "description": f"1..{MAX_LOUDNESS_VERSIONS} versions: {{version_id, profile | target_lufs + true_peak_db, loudness_range_lu?, sample_rate?}}; "
                                                                       f"profiles {sorted(LOUDNESS_PROFILES)} (none is a default)"},
         "tolerance_lufs": {"type": _NUM, "required": True, "min": 0.0, "max": 10.0, "description": "every version's measured integrated loudness must be within this of its target (LU), else VALIDATION_ERROR"}}},
+    "STEMS": {"description": "Write the inputs of a mix as separate stem files (e.g. dialogue, music, effects), each the programme's length (input 0's duration, as MIX) "
+                             "and aligned to its first sample; every input belongs to exactly one stem, so the stems summed equal a MIX of the same inputs and levels. "
+                             "A stem is referenced as op:<op_id>.<stem_id> (the set itself is not an artifact)", "inputs": (2, MAX_MIX_INPUTS), "parameters": {
+        "stems": {"type": _STEMS, "required": True, "description": f"1..{MAX_STEMS} stems: {{stem_id, inputs: [input index], role?: {list(STEM_ROLES)}}}; every input index in exactly one stem"},
+        "levels": {"type": _LEVELS, "required": False, "description": "per-input {gain_db}, aligned with inputs, as the MIX they sum to (omit: 0 dB); mute is not accepted (a muted input belongs to no stem: leave it out of the inputs)"}}},
     "CONCAT": {"description": "Concatenate 2..32 inputs in order (ffmpeg concat), optional equal-power crossfade", "inputs": (2, MAX_CONCAT_INPUTS), "parameters": {
         "crossfade": {"type": _NUM, "required": False, "min": 0.0, "max": 30.0, "default": 0.0, "description": "seconds of acrossfade between clips (0 = butt join)"},
         "sample_rate": {"type": _INT, "required": False, "enum": list(SAMPLE_RATES), "description": "output sample rate (omit: the first input's)"},
@@ -509,9 +519,52 @@ def _loudness_versions(value: Any, where: str) -> List[Dict[str, Any]]:
     return out
 
 
-def loudness_version_ids(op: "AudioOperation") -> List[str]:
-    """op ids under which the versions of a LOUDNESS_SET operation are referenced (op:<op_id>.<version_id>)."""
-    return [f"{op.op_id}.{v['version_id']}" for v in op.parameters.get("versions", [])] if op.type == "LOUDNESS_SET" else []
+def _stems(value: Any, where: str, n_inputs: int) -> List[Dict[str, Any]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_STEMS:
+        raise AudioError("INVALID_REQUEST", f"{where} must be an array of 1..{MAX_STEMS} stems", {"field": where})
+    out: List[Dict[str, Any]] = []
+    seen: Dict[int, str] = {}
+    for i, v in enumerate(value):
+        w = f"{where}[{i}]"
+        d = _obj(v, w, ("stem_id", "inputs", "role"), ("stem_id", "inputs"))
+        sid = _id(d["stem_id"], f"{w}.stem_id")
+        if any(x["stem_id"] == sid for x in out):
+            raise AudioError("DEPENDENCY_ERROR", f"{w}: duplicate stem_id {sid!r}", {"field": w})
+        idx = d["inputs"]
+        if not isinstance(idx, list) or not idx:
+            raise AudioError("INVALID_REQUEST", f"{w}.inputs must be a non-empty array of input indices", {"field": f"{w}.inputs"})
+        members: List[int] = []
+        for j, x in enumerate(idx):
+            k = int(_number(x, f"{w}.inputs[{j}]", 0, n_inputs - 1, integer=True))
+            if k in seen:
+                raise AudioError("INVALID_REQUEST", f"{w}.inputs: input {k} is already in stem {seen[k]!r} (each input belongs to exactly one stem)",
+                                 {"field": f"{w}.inputs", "reason": "input_in_two_stems", "input": k})
+            seen[k] = sid
+            members.append(k)
+        stem: Dict[str, Any] = {"stem_id": sid, "inputs": sorted(members)}
+        if "role" in d:
+            if d["role"] not in STEM_ROLES:
+                raise AudioError("INVALID_REQUEST", f"{w}.role must be one of {list(STEM_ROLES)}", {"field": f"{w}.role"})
+            stem["role"] = d["role"]
+        out.append(stem)
+    missing = [k for k in range(n_inputs) if k not in seen]
+    if missing:
+        raise AudioError("INVALID_REQUEST", f"{where}: input(s) {missing} belong to no stem (the stems must sum to the whole mix)",
+                         {"field": where, "reason": "input_in_no_stem", "inputs": missing})
+    return out
+
+
+# operations whose parts are referenced as op:<op_id>.<part_id>; the operation itself has no artifact
+PART_OPERATIONS: Dict[str, Tuple[str, str]] = {"LOUDNESS_SET": ("versions", "version_id"), "STEMS": ("stems", "stem_id")}
+
+
+def part_ids(op: "AudioOperation") -> List[str]:
+    """op ids under which the parts of a LOUDNESS_SET (versions) or STEMS (stems) operation are referenced."""
+    if op.type not in PART_OPERATIONS:
+        return []
+    key, field_id = PART_OPERATIONS[op.type]
+    return [f"{op.op_id}.{v[field_id]}" for v in op.parameters.get(key, [])]
+
 
 
 def _check_noise_floor(value: Any, where: str) -> None:
@@ -571,6 +624,8 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
             out[name] = _lexicon(v, w)
         elif t == _VERSIONS:
             out[name] = _loudness_versions(v, w)
+        elif t == _STEMS:
+            out[name] = _stems(v, w, n_inputs)
         elif t == _STAGE:
             spec_stage = DYNAMICS_STAGES[ps["stage"]]
             sd = _obj(v, w, tuple(spec_stage), ())
@@ -579,6 +634,10 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
         raise AudioError("INVALID_REQUEST", f"{where}: DYNAMICS needs at least one of compressor, limiter, gate", {"field": where})
     if op_type == "TRIM" and out["end"] <= out["start"]:
         raise AudioError("INVALID_TIME_RANGE", f"{where}: end must be greater than start", {"field": where})
+    if op_type == "STEMS":
+        out.setdefault("levels", [{"gain_db": 0.0, "mute": False} for _ in range(n_inputs)])
+        if any(lv["mute"] for lv in out["levels"]):
+            raise AudioError("INVALID_REQUEST", f"{where}.levels: mute is not accepted by STEMS (leave the input out instead)", {"field": f"{where}.levels"})
     if op_type == "MIX" and "levels" not in out:
         out["levels"] = [{"gain_db": 0.0, "mute": False} for _ in range(n_inputs)]
     if op_type == "MIX" and "duck" in out:
@@ -692,26 +751,27 @@ def parse_request(doc: Any) -> AudioRequest:
         params = validate_parameters(typ, od.get("parameters"), len(inputs), f"{w}.parameters")
         operations.append(AudioOperation(oid, typ, list(inputs), params))
 
-    # LOUDNESS_SET versions are referenced as op:<op_id>.<version_id>; the set itself has no artifact
-    sets = {op.op_id for op in operations if op.type == "LOUDNESS_SET"}
+    # LOUDNESS_SET versions / STEMS stems are referenced as op:<op_id>.<part_id>; the operation itself has no artifact
+    sets = {op.op_id: op for op in operations if op.type in PART_OPERATIONS}
     for op in operations:
-        for vid in loudness_version_ids(op):
+        for vid in part_ids(op):
             if not ID_RE.match(vid):
-                raise AudioError("INVALID_REQUEST", f"operation {op.op_id!r}: version reference {vid!r} must match {ID_RE.pattern} (shorten op_id or version_id)", {"op_id": op.op_id})
+                raise AudioError("INVALID_REQUEST", f"operation {op.op_id!r}: part reference {vid!r} must match {ID_RE.pattern} (shorten op_id or the part id)", {"op_id": op.op_id})
             if vid in op_ids:
-                raise AudioError("DEPENDENCY_ERROR", f"operation {op.op_id!r}: version {vid!r} collides with an op_id", {"op_id": op.op_id, "ref": vid})
+                raise AudioError("DEPENDENCY_ERROR", f"operation {op.op_id!r}: part {vid!r} collides with an op_id", {"op_id": op.op_id, "ref": vid})
             op_ids.add(vid)
 
     def _not_a_set(ref: str, where: str) -> None:
         kind, ident = parse_ref(ref, "")
         if kind == "op" and ident in sets:
-            versions = next(loudness_version_ids(o) for o in operations if o.op_id == ident)
-            raise AudioError("INVALID_REQUEST", f"{where}: {ref!r} is a LOUDNESS_SET; reference one of its versions: {sorted('op:' + x for x in versions)}",
-                             {"ref": ref, "reason": "loudness_set_reference", "versions": sorted("op:" + x for x in versions)})
+            group = sets[ident]
+            parts = sorted("op:" + x for x in part_ids(group))
+            raise AudioError("INVALID_REQUEST", f"{where}: {ref!r} is a {group.type}; reference one of its {PART_OPERATIONS[group.type][0]}: {parts}",
+                             {"ref": ref, "reason": f"{group.type.lower()}_reference", PART_OPERATIONS[group.type][0]: parts})
 
     # a LOUDNESS_SET version is a delivery: only outputs reference it (a later operation would change the loudness its
     # measurement vouches for, and the delivered file would no longer be the version that was verified)
-    versions = {vid for op in operations for vid in loudness_version_ids(op)}
+    versions = {vid for op in operations if op.type == "LOUDNESS_SET" for vid in part_ids(op)}
 
     # reference existence (cycles / ordering are checked by graph.py)
     for op in operations:

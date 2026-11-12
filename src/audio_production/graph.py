@@ -4,6 +4,7 @@ Node kinds:
   track node   "track:<id>"  reads a source; implicit TRIM (track.range) and GAIN (track.gain_db) are materialised
                              as explicit nodes "op:<track>.range" / "op:<track>.gain" so the graph is honest
   op node      "op:<id>"     one AudioOperation
+  stem node    "op:<id>.<stem_id>"  one stem of a STEMS operation (type STEM, implicit; reads every input of it)
   version node "op:<id>.<version_id>"  one version of a LOUDNESS_SET (type LOUDNESS_VERSION, implicit); the set
                              itself has no node of its own
 Every node has: node_id, type, inputs (node ids), parameters, dependencies (transitive closure is not stored), and
@@ -77,6 +78,15 @@ class OperationGraph:
                     params = {k: v[k] for k in ("target_lufs", "true_peak_db", "loudness_range_lu", "sample_rate", "profile") if k in v}
                     params.update(tolerance_lufs=op.parameters["tolerance_lufs"], loudness_set=op.op_id, version_id=v["version_id"])
                     self._add(Node(f"{nid}.{v['version_id']}", "LOUDNESS_VERSION", list(inputs), params, implicit=True))
+                continue
+            if op.type == "STEMS":
+                # one node per stem, "op:<op_id>.<stem_id>", reading every input: input 0 sets the programme's length
+                for stem in op.parameters["stems"]:
+                    params = {"stems_op": op.op_id, "stem_id": stem["stem_id"], "members": list(stem["inputs"]),
+                              "gains_db": [op.parameters["levels"][k]["gain_db"] for k in stem["inputs"]]}
+                    if "role" in stem:
+                        params["role"] = stem["role"]
+                    self._add(Node(f"{nid}.{stem['stem_id']}", "STEM", list(inputs), params, implicit=True))
                 continue
             self._add(Node(nid, op.type, inputs, dict(op.parameters)))
         for node in self.nodes.values():

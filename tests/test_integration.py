@@ -660,3 +660,57 @@ def test_a_failing_output_leaves_no_output_of_the_run_behind(workspace):
     assert d["ok"], d.get("error")
     assert sorted(p.name for p in (workspace / "out").iterdir()) == ["a.wav", "b.flac", "c.wav"] and probe(workspace / "out" / "a.wav")["duration"] > 5
     assert all(o["artifact"]["path"] == o["path"] for o in d["outputs"])
+
+
+def pcm16(path):
+    import wave
+    import array
+    with wave.open(str(path)) as w:
+        assert w.getsampwidth() == 2 and w.getnchannels() == 1
+        a = array.array("h")
+        a.frombytes(w.readframes(w.getnframes()))
+        return a, w.getframerate()
+
+
+def test_stems_sum_to_the_mix(workspace):
+    # ECOSYSTEM_ROADMAP step 8 "Done when": the stems summed equal the mix within -60 dB residual and every stem has the
+    # programme's sample count. Dialogue is input 0 (6 s); the music bed is longer (8 s) and the effects shorter (4 s)
+    tracks = [{"track_id": "dia", "source_id": "d"}, {"track_id": "mus", "source_id": "m"}, {"track_id": "fx", "source_id": "e"}]
+    sources = [{"source_id": "d", "path": "keyed.wav"}, {"source_id": "m", "path": "longbed.wav"}, {"source_id": "e", "path": "sfx.wav"}]
+    levels = [{"gain_db": -2}, {"gain_db": -6}, {"gain_db": -3}]
+    ins = ["track:dia", "track:mus", "track:fx"]
+    ops = [op("mix", "MIX", ins, levels=levels),
+           op("st", "STEMS", ins, levels=[{"gain_db": lv["gain_db"]} for lv in levels],
+              stems=[{"stem_id": "dialogue", "inputs": [0], "role": "dialogue"}, {"stem_id": "music", "inputs": [1], "role": "music"},
+                     {"stem_id": "effects", "inputs": [2], "role": "effects"}])]
+    outputs = [{"output_id": "mix", "operation": "op:mix", "path": "out/mix.wav", "format": "wav"}] + [
+        {"output_id": s, "operation": f"op:st.{s}", "path": f"out/{s}.wav", "format": "wav"} for s in ("dialogue", "music", "effects")]
+    code, d = run(request_doc(ops, outputs=outputs, sources=sources, tracks=tracks))
+    assert code == 0 and d["ok"], d.get("error")
+    mixed, sr = pcm16(workspace / "out" / "mix.wav")
+    assert sr == 48000 and len(mixed) == 6 * 48000
+    stems = {s: pcm16(workspace / "out" / f"{s}.wav")[0] for s in ("dialogue", "music", "effects")}
+    assert all(len(a) == len(mixed) for a in stems.values()), {s: len(a) for s, a in stems.items()}
+    residual = max(abs(stems["dialogue"][i] + stems["music"][i] + stems["effects"][i] - mixed[i]) for i in range(len(mixed)))
+    import math
+    assert 20 * math.log10(max(residual, 1) / 32768) <= -60, residual
+    # the stems carry their own content: the effects stem is silent after 4 s (padded), the music stem is not (trimmed bed)
+    assert max(abs(x) for x in stems["effects"][4 * 48000 + 10:]) == 0 and max(abs(x) for x in stems["music"][5 * 48000:]) > 1000
+    (summary,) = d["stems"]
+    assert [(s["stem_id"], s["role"], s["samples"], s["programme_samples"]) for s in summary["stems"]] == [
+        ("dialogue", "dialogue", 288000, 288000), ("music", "music", 288000, 288000), ("effects", "effects", 288000, 288000)]
+    assert all(s["status"] == "completed" and s["outputs"] for s in summary["stems"])
+
+
+def test_stems_group_two_inputs_and_refuse_the_group_reference(workspace):
+    tracks = [{"track_id": "dia", "source_id": "d"}, {"track_id": "mus", "source_id": "m"}, {"track_id": "fx", "source_id": "e"}]
+    sources = [{"source_id": "d", "path": "keyed.wav"}, {"source_id": "m", "path": "longbed.wav"}, {"source_id": "e", "path": "sfx.wav"}]
+    ops = [op("st", "STEMS", ["track:dia", "track:mus", "track:fx"], stems=[{"stem_id": "dx", "inputs": [0]}, {"stem_id": "me", "inputs": [1, 2]}])]
+    outputs = [{"output_id": s, "operation": f"op:st.{s}", "path": f"out/{s}.flac", "format": "flac"} for s in ("dx", "me")]
+    code, d = run(request_doc(ops, outputs=outputs, sources=sources, tracks=tracks))
+    assert d["ok"], d.get("error")
+    assert [s["samples"] for s in d["stems"][0]["stems"]] == [288000, 288000]
+    (cmd,) = results(d)["op:st.me"]["tool_commands_observed"]     # one call: --replace (the bed) with --music (the effects) on top
+    assert "longbed.wav" in cmd and "sfx.wav" in cmd
+    code, d = run(request_doc(ops, outputs=[{"output_id": "x", "operation": "op:st", "path": "out/x.wav", "format": "wav"}], sources=sources, tracks=tracks))
+    assert d["error"]["code"] == "INVALID_REQUEST" and d["error"]["details"]["reason"] == "stems_reference" and d["error"]["details"]["stems"] == ["op:st.dx", "op:st.me"]
