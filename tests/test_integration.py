@@ -703,14 +703,25 @@ def test_stems_sum_to_the_mix(workspace):
 
 
 def test_stems_group_two_inputs_and_refuse_the_group_reference(workspace):
-    tracks = [{"track_id": "dia", "source_id": "d"}, {"track_id": "mus", "source_id": "m"}, {"track_id": "fx", "source_id": "e"}]
-    sources = [{"source_id": "d", "path": "keyed.wav"}, {"source_id": "m", "path": "longbed.wav"}, {"source_id": "e", "path": "sfx.wav"}]
-    ops = [op("st", "STEMS", ["track:dia", "track:mus", "track:fx"], stems=[{"stem_id": "dx", "inputs": [0]}, {"stem_id": "me", "inputs": [1, 2]}])]
-    outputs = [{"output_id": s, "operation": f"op:st.{s}", "path": f"out/{s}.flac", "format": "flac"} for s in ("dx", "me")]
+    # the shorter effects track is the stem's first member: it is conformed to the programme on its own before the
+    # longer bed is folded on top, so the bed is still heard after the effects end (4 s)
+    tracks = [{"track_id": "dia", "source_id": "d"}, {"track_id": "fx", "source_id": "e"}, {"track_id": "mus", "source_id": "m"}]
+    sources = [{"source_id": "d", "path": "keyed.wav"}, {"source_id": "e", "path": "sfx.wav"}, {"source_id": "m", "path": "longbed.wav"}]
+    ops = [op("st", "STEMS", ["track:dia", "track:fx", "track:mus"], stems=[{"stem_id": "dx", "inputs": [0]}, {"stem_id": "me", "inputs": [1, 2]}])]
+    outputs = [{"output_id": s, "operation": f"op:st.{s}", "path": f"out/{s}.wav", "format": "wav"} for s in ("dx", "me")]
     code, d = run(request_doc(ops, outputs=outputs, sources=sources, tracks=tracks))
     assert d["ok"], d.get("error")
     assert [s["samples"] for s in d["stems"][0]["stems"]] == [288000, 288000]
-    (cmd,) = results(d)["op:st.me"]["tool_commands_observed"]     # one call: --replace (the bed) with --music (the effects) on top
-    assert "longbed.wav" in cmd and "sfx.wav" in cmd
+    assert [o["samples"] for s in d["stems"][0]["stems"] for o in s["outputs"]] == [288000, 288000]
+    me, _ = pcm16(workspace / "out" / "me.wav")
+    assert max(abs(x) for x in me[5 * 48000:]) > 1000
+    assert len(results(d)["op:st.me"]["tool_commands_observed"]) >= 2      # --replace alone, then --music on top
     code, d = run(request_doc(ops, outputs=[{"output_id": "x", "operation": "op:st", "path": "out/x.wav", "format": "wav"}], sources=sources, tracks=tracks))
     assert d["error"]["code"] == "INVALID_REQUEST" and d["error"]["details"]["reason"] == "stems_reference" and d["error"]["details"]["stems"] == ["op:st.dx", "op:st.me"]
+    code, d = run(request_doc(ops, outputs=[{"output_id": s, "operation": f"op:st.{s}", "path": f"out/{s}.m4a", "format": "m4a"} for s in ("dx", "me")], sources=sources, tracks=tracks))
+    assert d["error"]["code"] == "UNSUPPORTED_FORMAT" and d["error"]["details"]["reason"] == "stem_needs_lossless"
+    # a stem that reaches full scale is clipped in its 16-bit intermediate and would not sum to the mix: refused
+    loud = [op("st", "STEMS", ["track:dia", "track:fx", "track:mus"], levels=[{"gain_db": 12}, {"gain_db": 0}, {"gain_db": 0}],
+               stems=[{"stem_id": "dx", "inputs": [0]}, {"stem_id": "me", "inputs": [1, 2]}])]
+    code, d = run(request_doc(loud, outputs=outputs, sources=sources, tracks=tracks))
+    assert d["error"]["code"] == "VALIDATION_ERROR" and d["error"]["details"]["reason"] == "stem_clipped" and not (workspace / "out").exists()

@@ -270,9 +270,15 @@
     is the programme and sets the length, as MIX does (amix `duration=first`). The operation itself has no artifact.
     A reference to `op:<op_id>` is refused and the error lists the stems.
   - *Execution.* A stem with input 0 folds its members onto input 0 with `audio --music --music-volume`, exactly as
-    MIX does. A stem without input 0 runs `audio <input 0> --replace <first member> [--gain]`: ffmpeg-skill pads or
-    trims the member to input 0's duration. The other members are folded on top through `--music`. Each stem's
-    sample count must equal input 0's (`VALIDATION_ERROR` `stem_length_mismatch` otherwise).
+    MIX does. A stem without input 0 runs `audio <input 0> --replace <first member> [--gain]` on its own:
+    ffmpeg-skill pads or trims the member to input 0's duration. The other members are folded on top of that sidecar
+    through `--music`. In one call, amix `duration=first` would end them where the replacement ends.
+  - *Checks.* Each stem's sample count must equal input 0's, on the intermediate and on the delivered file
+    (`VALIDATION_ERROR` `stem_length_mismatch`). A stem is delivered as wav / flac only (`UNSUPPORTED_FORMAT`
+    `stem_needs_lossless`): a lossy encoder changes the sample count and the sum. Every fold writes 16-bit PCM, so a
+    stem that reaches full scale is clipped, and where it clips depends on the grouping. A stem whose true peak
+    (`loudness --measure-only`, required at planning) reaches 0 dBTP is therefore refused (`stem_clipped`). A MIX
+    that clips is the MIX's own concern.
   - *Not provided.* One multitrack WAV / MOV with named tracks: ffmpeg-skill has no multitrack writer, so the gap
     is handed over (docs/ffmpeg-skill.md). Separate files work without it.
   - *Contract.* An operation added (`STEMS`, capability `audio.stems`) and the optional flag `audio.replace`; the

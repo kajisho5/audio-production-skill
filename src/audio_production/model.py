@@ -829,6 +829,11 @@ def parse_request(doc: Any) -> AudioRequest:
         elif "duration_tolerance" in ex:
             raise AudioError("INVALID_REQUEST", f"{w}.expect.duration_tolerance requires expect.duration")
         outputs.append(AudioOutput(oid, od["operation"], od["path"], fmt, overwrite, expect))
+    stem_refs = {"op:" + x for op in operations if op.type == "STEMS" for x in part_ids(op)}
+    for o in outputs:
+        if o.operation in stem_refs and not OUTPUT_FORMATS[o.format]["lossless"]:
+            raise AudioError("UNSUPPORTED_FORMAT", f"output {o.output_id!r}: a stem is delivered lossless only (wav / flac): a lossy encoder changes the sample count "
+                             "and the sum", {"output_id": o.output_id, "format": o.format, "reason": "stem_needs_lossless"})
     if len({o.path for o in outputs}) != len(outputs):
         raise AudioError("OUTPUT_ERROR", "two outputs share the same path", {"reason": "duplicate_output_path"})
 
