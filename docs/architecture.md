@@ -70,8 +70,12 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
    post-normalization loudness comes from the `result` field of that same `ffmpeg-skill/loudness` call's `--json`
    response (ffmpeg-skill >= 0.12.0), not a second process — only a release whose response has no `result` gets a
    second `--measure-only` call on the output (ADR-15); with `tolerance_lufs` set, an off-target result is a
-   `VALIDATION_ERROR`.
-6. Export every output with `ffmpeg-skill/audio` to the requested format and validate it against `expect`.
+   `VALIDATION_ERROR`. A LOUDNESS_SET expands into one `LOUDNESS_VERSION` node per version
+   (`op:<op_id>.<version_id>`), each verified the same way but always against `tolerance_lufs` and with no slack on
+   the true-peak ceiling (ADR-23).
+6. Export every output with `ffmpeg-skill/audio` to a staging file next to its target (`.<name>.staged<ext>`) in the
+   requested format and validate it against `expect`; the targets are replaced only once every output passed. An output
+   of a LOUDNESS_SET version is measured again (`loudness --measure-only`) and summarised in `loudness_sets`.
 7. Return one response document: `ok`, `status`, `plan`, `results`, `outputs` (with provenance), `tool_runs`,
    `error?`. On the first failure the remaining nodes are `skipped`; on SIGINT / SIGTERM the running tool's process
    group is killed and the status is `cancelled`.

@@ -55,7 +55,26 @@ TRANSCRIPT_SCHEMA = "transcription-skill/transcript/0.1"   # the transcript docu
 
 # ---- parameter schemas: name -> {type, required, min, max, enum, description}
 _NUM, _INT, _BOOL, _STR, _RANGES, _LEVELS, _STAGE = "number", "integer", "boolean", "string", "ranges", "levels", "stage"
-_DUCK, _WORDS, _TRANSCRIPT, _LEXICON = "duck", "words", "transcript", "lexicon"
+_DUCK, _WORDS, _TRANSCRIPT, _LEXICON, _VERSIONS = "duck", "words", "transcript", "lexicon", "loudness_versions"
+
+# LOUDNESS_SET: delivery loudness profiles a version may name instead of stating its own target. International
+# standards first; a regional profile is listed beside them and is only ever used when a version names it (there is
+# no default profile and no default target). LKFS and LUFS are the same unit (ITU-R BS.1770).
+LOUDNESS_PROFILES: Dict[str, Dict[str, Any]] = {
+    "ebu_r128": {"target_lufs": -23.0, "true_peak_db": -1.0, "scope": "international", "description": "EBU R128 broadcast: -23 LUFS, -1 dBTP"},
+    "atsc_a85": {"target_lufs": -24.0, "true_peak_db": -2.0, "scope": "international", "description": "ATSC A/85 broadcast: -24 LKFS, -2 dBTP"},
+    "arib_tr_b32": {"target_lufs": -24.0, "true_peak_db": -1.0, "scope": "regional:JP", "description": "ARIB TR-B32 broadcast (Japan): -24 LKFS, -1 dBTP"},
+}
+MAX_LOUDNESS_VERSIONS = 8
+# fields of one LOUDNESS_SET version (target_lufs / true_peak_db: exactly as NORMALIZE takes them)
+LOUDNESS_VERSION_FIELDS: Dict[str, Dict[str, Any]] = {
+    "version_id": {"type": _STR, "required": True, "description": "id of the version; the version is referenced as op:<op_id>.<version_id>"},
+    "profile": {"type": _STR, "required": False, "enum": sorted(LOUDNESS_PROFILES), "description": "a delivery profile (sets target_lufs and true_peak_db); exactly one of profile / target_lufs + true_peak_db"},
+    "target_lufs": {"type": _NUM, "required": False, "min": -70.0, "max": -5.0, "description": "stated integrated loudness target in LUFS (with true_peak_db; e.g. a streaming platform's own value)"},
+    "true_peak_db": {"type": _NUM, "required": False, "min": -20.0, "max": 0.0, "description": "stated true-peak ceiling in dBTP (with target_lufs)"},
+    "loudness_range_lu": {"type": _NUM, "required": False, "min": 1.0, "max": 50.0, "description": "loudness range target in LU (omit: ffmpeg-skill default 11)"},
+    "sample_rate": {"type": _INT, "required": False, "enum": list(SAMPLE_RATES), "description": "output sample rate of this version (omit: keep the input's)"},
+}
 
 # MIX.duck: the bed input that ffmpeg-skill/audio --duck lowers under input 0 (sidechaincompress keyed by input 0).
 # Ranges are the ones ffmpeg-skill audio.py checks before ffmpeg runs (sidechaincompress's own limits). Only
@@ -188,6 +207,12 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
         "declick_ms": {"type": _NUM, "required": False, "min": 0.0, "max": 200.0,
                        "description": "fade in ms on each side of every join (ffmpeg-skill/cut --declick-ms; 0 = butt joins). Omit: ffmpeg-skill's own behaviour. "
                                       "A value above 0 needs an ffmpeg-skill whose contract declares --declick-ms (otherwise TOOL_ERROR before a tool runs)"}}},
+    "LOUDNESS_SET": {"description": "One master into several delivery loudness versions in one run: each version is a two-pass loudnorm (true-peak ceiling) of the same input, "
+                                    "re-measured and refused unless within tolerance_lufs of its target and at or under its true-peak ceiling; each delivered output is measured again. "
+                                    "A version is referenced as op:<op_id>.<version_id> (the set itself is not an artifact)", "inputs": (1, 1), "parameters": {
+        "versions": {"type": _VERSIONS, "required": True, "description": f"1..{MAX_LOUDNESS_VERSIONS} versions: {{version_id, profile | target_lufs + true_peak_db, loudness_range_lu?, sample_rate?}}; "
+                                                                      f"profiles {sorted(LOUDNESS_PROFILES)} (none is a default)"},
+        "tolerance_lufs": {"type": _NUM, "required": True, "min": 0.0, "max": 10.0, "description": "every version's measured integrated loudness must be within this of its target (LU), else VALIDATION_ERROR"}}},
     "CONCAT": {"description": "Concatenate 2..32 inputs in order (ffmpeg concat), optional equal-power crossfade", "inputs": (2, MAX_CONCAT_INPUTS), "parameters": {
         "crossfade": {"type": _NUM, "required": False, "min": 0.0, "max": 30.0, "default": 0.0, "description": "seconds of acrossfade between clips (0 = butt join)"},
         "sample_rate": {"type": _INT, "required": False, "enum": list(SAMPLE_RATES), "description": "output sample rate (omit: the first input's)"},
@@ -444,6 +469,51 @@ def _lexicon(value: Any, where: str) -> Dict[str, Any]:
     return out
 
 
+def _loudness_versions(value: Any, where: str) -> List[Dict[str, Any]]:
+    """LOUDNESS_SET.versions -> [{version_id, target_lufs, true_peak_db, profile?, loudness_range_lu?, sample_rate?}].
+    A profile is resolved here to its numbers (recorded with the profile name); a stated target needs both numbers."""
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_LOUDNESS_VERSIONS:
+        raise AudioError("INVALID_REQUEST", f"{where} must be an array of 1..{MAX_LOUDNESS_VERSIONS} versions", {"field": where})
+    out: List[Dict[str, Any]] = []
+    for i, v in enumerate(value):
+        w = f"{where}[{i}]"
+        d = _obj(v, w, tuple(LOUDNESS_VERSION_FIELDS), ("version_id",))
+        vid = _id(d["version_id"], f"{w}.version_id")
+        if any(x["version_id"] == vid for x in out):
+            raise AudioError("DEPENDENCY_ERROR", f"{w}: duplicate version_id {vid!r}", {"field": w})
+        ver: Dict[str, Any] = {"version_id": vid}
+        if "profile" in d:
+            if "target_lufs" in d or "true_peak_db" in d:
+                raise AudioError("INVALID_REQUEST", f"{w}: give either profile or target_lufs + true_peak_db, not both", {"field": w, "reason": "ambiguous_target"})
+            prof = d["profile"]
+            if not isinstance(prof, str) or prof not in LOUDNESS_PROFILES:
+                raise AudioError("INVALID_REQUEST", f"{w}.profile must be one of {sorted(LOUDNESS_PROFILES)}", {"field": f"{w}.profile", "available": sorted(LOUDNESS_PROFILES)})
+            ver.update(profile=prof, target_lufs=LOUDNESS_PROFILES[prof]["target_lufs"], true_peak_db=LOUDNESS_PROFILES[prof]["true_peak_db"])
+        else:
+            missing = [k for k in ("target_lufs", "true_peak_db") if k not in d]
+            if missing:
+                raise AudioError("INVALID_REQUEST", f"{w}: a version names a profile or states both target_lufs and true_peak_db (missing {missing}; there is no default)",
+                                 {"field": w, "missing": missing})
+            for k in ("target_lufs", "true_peak_db"):
+                spec = LOUDNESS_VERSION_FIELDS[k]
+                ver[k] = _number(d[k], f"{w}.{k}", spec["min"], spec["max"])
+        if "loudness_range_lu" in d:
+            spec = LOUDNESS_VERSION_FIELDS["loudness_range_lu"]
+            ver["loudness_range_lu"] = _number(d["loudness_range_lu"], f"{w}.loudness_range_lu", spec["min"], spec["max"])
+        if "sample_rate" in d:
+            sr = int(_number(d["sample_rate"], f"{w}.sample_rate", integer=True))
+            if sr not in SAMPLE_RATES:
+                raise AudioError("INVALID_SAMPLE_RATE", f"{w}.sample_rate must be one of {list(SAMPLE_RATES)}", {"field": f"{w}.sample_rate"})
+            ver["sample_rate"] = sr
+        out.append(ver)
+    return out
+
+
+def loudness_version_ids(op: "AudioOperation") -> List[str]:
+    """op ids under which the versions of a LOUDNESS_SET operation are referenced (op:<op_id>.<version_id>)."""
+    return [f"{op.op_id}.{v['version_id']}" for v in op.parameters.get("versions", [])] if op.type == "LOUDNESS_SET" else []
+
+
 def _check_noise_floor(value: Any, where: str) -> None:
     """Refuse a NOISE_REDUCTION strength_db below 20 with the reason (ADR-17); other bad values fall through to _number."""
     lo, hi = NOISE_REDUCTION_STRENGTH_DB
@@ -499,6 +569,8 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
             out["words"], out["transcript"] = _transcript_words(v, w)
         elif t == _LEXICON:
             out[name] = _lexicon(v, w)
+        elif t == _VERSIONS:
+            out[name] = _loudness_versions(v, w)
         elif t == _STAGE:
             spec_stage = DYNAMICS_STAGES[ps["stage"]]
             sd = _obj(v, w, tuple(spec_stage), ())
@@ -620,9 +692,34 @@ def parse_request(doc: Any) -> AudioRequest:
         params = validate_parameters(typ, od.get("parameters"), len(inputs), f"{w}.parameters")
         operations.append(AudioOperation(oid, typ, list(inputs), params))
 
+    # LOUDNESS_SET versions are referenced as op:<op_id>.<version_id>; the set itself has no artifact
+    sets = {op.op_id for op in operations if op.type == "LOUDNESS_SET"}
+    for op in operations:
+        for vid in loudness_version_ids(op):
+            if not ID_RE.match(vid):
+                raise AudioError("INVALID_REQUEST", f"operation {op.op_id!r}: version reference {vid!r} must match {ID_RE.pattern} (shorten op_id or version_id)", {"op_id": op.op_id})
+            if vid in op_ids:
+                raise AudioError("DEPENDENCY_ERROR", f"operation {op.op_id!r}: version {vid!r} collides with an op_id", {"op_id": op.op_id, "ref": vid})
+            op_ids.add(vid)
+
+    def _not_a_set(ref: str, where: str) -> None:
+        kind, ident = parse_ref(ref, "")
+        if kind == "op" and ident in sets:
+            versions = next(loudness_version_ids(o) for o in operations if o.op_id == ident)
+            raise AudioError("INVALID_REQUEST", f"{where}: {ref!r} is a LOUDNESS_SET; reference one of its versions: {sorted('op:' + x for x in versions)}",
+                             {"ref": ref, "reason": "loudness_set_reference", "versions": sorted("op:" + x for x in versions)})
+
+    # a LOUDNESS_SET version is a delivery: only outputs reference it (a later operation would change the loudness its
+    # measurement vouches for, and the delivered file would no longer be the version that was verified)
+    versions = {vid for op in operations for vid in loudness_version_ids(op)}
+
     # reference existence (cycles / ordering are checked by graph.py)
     for op in operations:
         for ref in op.inputs:
+            _not_a_set(ref, f"operation {op.op_id!r}")
+            if parse_ref(ref, "")[1] in versions and ref.startswith("op:"):
+                raise AudioError("INVALID_REQUEST", f"operation {op.op_id!r}: {ref!r} is a LOUDNESS_SET version, which only an output may reference "
+                                 "(process before the set, not after it)", {"op_id": op.op_id, "ref": ref, "reason": "loudness_version_not_terminal"})
             kind, ident = parse_ref(ref, "")
             if kind == "track" and ident not in track_ids or kind == "op" and ident not in op_ids:
                 raise AudioError("MISSING_INPUT", f"operation {op.op_id!r} references unknown {kind} {ident!r}", {"op_id": op.op_id, "ref": ref})
@@ -640,6 +737,7 @@ def parse_request(doc: Any) -> AudioRequest:
         if any(x.output_id == oid for x in outputs):
             raise AudioError("DEPENDENCY_ERROR", f"duplicate output_id {oid!r}", {"field": w})
         kind, ident = parse_ref(od["operation"], f"{w}.operation")
+        _not_a_set(od["operation"], w)
         if kind == "track" and ident not in track_ids or kind == "op" and ident not in op_ids:
             raise AudioError("MISSING_INPUT", f"{w}: references unknown {kind} {ident!r}", {"field": w, "ref": od["operation"]})
         if not isinstance(od["path"], str) or not od["path"]:

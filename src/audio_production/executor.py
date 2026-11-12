@@ -11,6 +11,7 @@ Every intermediate is PCM WAV in <workspace>/.audio-production/<project_id>/<ide
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -40,6 +41,8 @@ CLEANUP_POLICIES = ("keep", "intermediates")
 PARTIAL_REMOVE_SETTLE = 10.0
 
 # tool selection per node type (ffmpeg-skill tool, extra capabilities beyond ffmpeg/ffprobe)
+LOUDNESS_NODE_TYPES = ("NORMALIZE", "LOUDNESS_VERSION")
+
 TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
     "SOURCE_TRACK": ("probe", []),
     "GAIN": ("audio", ["filter:volume"]),
@@ -50,6 +53,8 @@ TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
     "FADE_IN": ("audio", ["filter:afade"]),
     "FADE_OUT": ("audio", ["filter:afade"]),
     "NORMALIZE": ("loudness", ["filter:loudnorm"]),
+    "LOUDNESS_SET": ("loudness", ["filter:loudnorm"]),
+    "LOUDNESS_VERSION": ("loudness", ["filter:loudnorm"]),   # graph node of one LOUDNESS_SET version
     "MIX": ("audio", ["filter:amix"]),
     "MONO": ("audio", ["filter:pan"]),
     "STEREO": ("audio", ["filter:aformat"]),
@@ -194,7 +199,10 @@ class Executor:
             self._plan_node(states, states[n], sources)
         plan = self._plan_document(graph, states, sources, outputs, project, work_dir)
         if self.dry_run:
-            return self._envelope(True, "ok", {"dry_run": True, "plan": plan, "results": [states[n].to_dict() for n in graph.order], "outputs": plan["outputs"]})
+            body0: Dict[str, Any] = {"dry_run": True, "plan": plan, "results": [states[n].to_dict() for n in graph.order], "outputs": plan["outputs"]}
+            if any(o.type == "LOUDNESS_SET" for o in project.operations):
+                body0["loudness_sets"] = self.loudness_sets(project, [])
+            return self._envelope(True, "ok", body0)
 
         # execute
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -211,20 +219,37 @@ class Executor:
                 cancelled = e.code == "CANCELLED"
                 break
         out_results: List[Dict[str, Any]] = []
+        staged: List[Tuple[Path, Path, Any]] = []
         if failure is None:
+            # every output is written to a staging file next to its target and validated; the targets are replaced
+            # only once all of them passed, so a failing output never leaves earlier outputs of the run behind and
+            # never replaces a pre-existing target (overwrite: true) with a run that did not succeed
             for o in project.outputs:
                 try:
                     out_results.append(self._export(states[graph.output_nodes[o.output_id]], o, outputs[o.output_id], sources, timeout))
+                    staged.append((self.staging_path(outputs[o.output_id]), outputs[o.output_id], o))
                 except AudioError as e:
                     failure = e
                     cancelled = e.code == "CANCELLED"
                     out_results.append({"output_id": o.output_id, "status": "cancelled" if cancelled else "failed", "path": str(outputs[o.output_id]), "error": e.to_dict()})
                     break
+            if failure is None:
+                try:
+                    self._commit_outputs(staged)
+                except AudioError as e:
+                    failure = e
+                    for r in out_results:
+                        r["status"] = "failed"
+            if failure is not None:
+                for tmp, _, _ in staged:
+                    self._remove_partial(tmp)
         for n in graph.order:
             if states[n].status == "planned":
                 states[n].status = "skipped"
         body: Dict[str, Any] = {"dry_run": False, "plan": plan, "results": [states[n].to_dict() for n in graph.order], "outputs": out_results,
                                 "tool_runs": [self._tool_run_dict(r) for r in self.skill.runs]}
+        if any(o.type == "LOUDNESS_SET" for o in project.operations):
+            body["loudness_sets"] = self.loudness_sets(project, out_results)
         if failure is not None:
             body["error"] = failure.to_dict()
             body["cleanup"] = {"policy": self.cleanup, "applied": False, "reason": "run did not succeed; intermediates are kept for diagnosis and reuse"}
@@ -313,6 +338,10 @@ class Executor:
             if "duck" in p:
                 # refused here, at planning (dry run included), when the located ffmpeg-skill cannot duck as asked
                 st.measurements["duck"] = {**p["duck"], "key_input": 0, "ffmpeg_skill_flags": " ".join(self._duck_flags(p["duck"], where))}
+        elif node.type == "LOUDNESS_VERSION":
+            # every delivered output of a version is measured again: refused at planning when that cannot happen
+            self._require_flags("loudness", ("measure_only",), where, "LOUDNESS_SET (measurement of every delivered version)")
+            st.segments = list(ins[0].segments)
         elif node.type == "CONCAT":
             st.segments = concat([i.segments for i in ins], p.get("crossfade", 0.0))
         elif node.type == "VOICE_CLEANUP":
@@ -462,7 +491,7 @@ class Executor:
             return [("audio", [src, "--fade-in", fmt_seconds(p["duration"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
         if node.type == "FADE_OUT":
             return [("audio", [src, "--fade-out", fmt_seconds(p["duration"]), "--audio-stream", str(int(p["audio_stream"])), "-o", o])]
-        if node.type == "NORMALIZE":
+        if node.type in LOUDNESS_NODE_TYPES:
             args = [src, "-I", fmt_db(p["target_lufs"]), "--tp", fmt_db(p["true_peak_db"])]
             if "loudness_range_lu" in p:
                 args += ["--lra", fmt_db(p["loudness_range_lu"])]
@@ -560,7 +589,7 @@ class Executor:
                 if tool == "loudness":
                     loudness_data = run.data
             st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources))
-            if node.type == "NORMALIZE":
+            if node.type in LOUDNESS_NODE_TYPES:
                 if not isinstance((loudness_data or {}).get("result"), dict) and self.skill.takes_flag("loudness", "measure_only"):
                     loudness_data = self._measure_loudness(st, out_path, timeout)
                 self._verify_loudness(st, loudness_data)
@@ -649,7 +678,7 @@ class Executor:
         sr = int(audio.get("sample_rate") or 0)
         if expect and "sample_rate" in expect and sr != expect["sample_rate"]:
             raise AudioError("VALIDATION_ERROR", f"{what}: output sample rate {sr} differs from expected {expect['sample_rate']}", {"reason": "sample_rate_mismatch", "path": str(path)})
-        if st.node.type == "NORMALIZE" and "sample_rate" in st.node.parameters and sr != st.node.parameters["sample_rate"]:
+        if st.node.type in LOUDNESS_NODE_TYPES and "sample_rate" in st.node.parameters and sr != st.node.parameters["sample_rate"]:
             raise AudioError("VALIDATION_ERROR", f"{what}: output sample rate {sr} differs from requested {st.node.parameters['sample_rate']}", {"reason": "sample_rate_mismatch"})
         codec = audio.get("codec")
         want = OUTPUT_FORMATS[fmt or INTERMEDIATE_FORMAT]["codec"]
@@ -671,23 +700,31 @@ class Executor:
             return {}
         return {"result": dict(measured), "measured_by": "ffmpeg-skill/loudness --measure-only (output re-measured: this release's NORMALIZE response has no result)"}
 
-    def _verify_loudness(self, st: NodeState, tool_data: Optional[Dict[str, Any]]) -> None:
-        # ffmpeg-skill >= 0.12.0's loudness.py --json includes the post-normalization measurement (`result`) in the
-        # NORMALIZE call's own response; an older release is measured with --measure-only instead (_measure_loudness).
-        p = st.node.parameters
-        result = (tool_data or {}).get("result")
-        if not isinstance(result, dict):
-            raise AudioError("TOOL_ERROR", f"NORMALIZE {st.node.node_id}: ffmpeg-skill/loudness reported no post-normalization measurement "
-                             "(its response has no 'result' field and its contract declares no --measure-only)",
-                             {"reason": "loudness_result_missing"})
+    @staticmethod
+    def _loudness_numbers(result: Dict[str, Any]) -> Dict[str, Any]:
         measured: Dict[str, Any] = {"silent": bool(result.get("silent"))}
         for key, name in (("input_i", "integrated_lufs"), ("input_tp", "true_peak_dbtp"), ("input_lra", "loudness_range_lu")):
             try:
                 measured[name] = float(result[key]) if result.get(key) not in (None, "-inf", "inf") else None
             except (TypeError, ValueError, KeyError):
                 measured[name] = None
-        st.measurements["loudness"] = {"measured_by": (tool_data or {}).get("measured_by") or "ffmpeg-skill/loudness (NORMALIZE result)", "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"],
+        return measured
+
+    def _verify_loudness(self, st: NodeState, tool_data: Optional[Dict[str, Any]]) -> None:
+        # ffmpeg-skill >= 0.12.0's loudness.py --json includes the post-normalization measurement (`result`) in the
+        # NORMALIZE call's own response; an older release is measured with --measure-only instead (_measure_loudness).
+        p = st.node.parameters
+        result = (tool_data or {}).get("result")
+        if not isinstance(result, dict):
+            raise AudioError("TOOL_ERROR", f"{st.node.type} {st.node.node_id}: ffmpeg-skill/loudness reported no post-normalization measurement "
+                             "(its response has no 'result' field and its contract declares no --measure-only)",
+                             {"reason": "loudness_result_missing"})
+        measured = self._loudness_numbers(result)
+        st.measurements["loudness"] = {"measured_by": (tool_data or {}).get("measured_by") or f"ffmpeg-skill/loudness ({st.node.type} result)", "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"],
                                        "tolerance_lufs": p.get("tolerance_lufs"), **measured}
+        if st.node.type == "LOUDNESS_VERSION":
+            self._check_version(st, measured, f"LOUDNESS_SET {p['loudness_set']} version {p['version_id']!r}")
+            return
         tol = p.get("tolerance_lufs")
         if tol is not None:
             got = measured.get("integrated_lufs")
@@ -699,33 +736,107 @@ class Executor:
                 raise AudioError("VALIDATION_ERROR", f"NORMALIZE {st.node.node_id}: true peak {tp} dBTP exceeds ceiling {p['true_peak_db']}",
                                  {"reason": "true_peak_exceeded", "measured": tp, "ceiling": p["true_peak_db"]})
 
+    @staticmethod
+    def _check_version(st: NodeState, measured: Dict[str, Any], what: str) -> None:
+        """A LOUDNESS_SET version is delivered only within tolerance_lufs of its target and at or under its true-peak
+        ceiling -- no slack on the ceiling (ADR-23). A target the master cannot reach under the ceiling with a linear
+        gain (a high crest factor) is refused here, naming the version, instead of being delivered quieter or hotter."""
+        p = st.node.parameters
+        got, tp, tol = measured.get("integrated_lufs"), measured.get("true_peak_dbtp"), p["tolerance_lufs"]
+        got = got if isinstance(got, float) and math.isfinite(got) else None      # NaN / inf never pass a comparison
+        tp = tp if isinstance(tp, float) and math.isfinite(tp) else None
+        details = {"version_id": p["version_id"], "loudness_set": p["loudness_set"], "measured_lufs": got, "measured_true_peak_dbtp": tp,
+                   "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"], "tolerance_lufs": tol}
+        if got is None or abs(got - p["target_lufs"]) > tol:
+            raise AudioError("VALIDATION_ERROR", f"{what}: measured {got} LUFS is not within {tol} LU of {p['target_lufs']} LUFS "
+                             f"(true peak {tp} dBTP, ceiling {p['true_peak_db']} dBTP: a linear gain to the target would pass the ceiling)"
+                             if got is not None and tp is not None and got < p["target_lufs"] and tp + (p["target_lufs"] - got) > p["true_peak_db"] else
+                             f"{what}: measured {got} LUFS is not within {tol} LU of {p['target_lufs']} LUFS", {"reason": "loudness_off_target", **details})
+        if tp is None or tp > p["true_peak_db"]:
+            raise AudioError("VALIDATION_ERROR", f"{what}: true peak {tp} dBTP is above the ceiling {p['true_peak_db']} dBTP", {"reason": "true_peak_exceeded", **details})
+
     # ---- outputs
-    def _export(self, st: NodeState, out: Any, target: Path, sources: Dict[str, Dict[str, Any]], timeout: Optional[float]) -> Dict[str, Any]:
+    @staticmethod
+    def staging_path(target: Path) -> Path:
+        """Where an output is written and validated before it replaces its target (same directory, same extension)."""
+        return target.with_name(f".{target.stem}.staged{target.suffix}")
+
+    def _commit_outputs(self, staged: List[Tuple[Path, Path, Any]]) -> None:
+        for _, target, out in staged:
+            if target.exists() and not out.overwrite:
+                raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} appeared during execution", {"reason": "exists", "path": str(target)})
+        for tmp, target, out in staged:
+            try:
+                os.replace(str(tmp), str(target))
+            except OSError as e:
+                raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} could not be moved into place: {e}", {"reason": "commit_failed", "path": str(target)})
+
+    def _export(self, st: NodeState, out: Any, final: Path, sources: Dict[str, Dict[str, Any]], timeout: Optional[float]) -> Dict[str, Any]:
         src = self._artifact_path(st, sources)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        existed = target.exists()
-        if existed and not out.overwrite:
-            raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} appeared during execution", {"reason": "exists", "path": str(target)})
+        final.parent.mkdir(parents=True, exist_ok=True)
+        if final.exists() and not out.overwrite:
+            raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} appeared during execution", {"reason": "exists", "path": str(final)})
+        target = self.staging_path(final)
+        self._remove_partial(target)
         seconds, commands = 0.0, []
         try:
             args = [src, "-o", str(target)]
-            if out.overwrite and self.skill.takes_flag("audio", "overwrite"):
-                args.append("--overwrite")   # ffmpeg-skill >= 1.10 refuses to replace an existing file without it
             run: ToolRun = self.skill.run_tool("audio", args, timeout)
             seconds, commands = run.seconds, run.commands
             export_state = NodeState(Node(f"output:{out.output_id}", "EXPORT", [st.node.node_id]), stable_hash({"export": st.identity, "format": out.format}))
             export_state.segments = st.segments
             art = self._validate_artifact(target, export_state, expected_channels=st.artifact.channels if st.artifact else None, expect=out.expect, fmt=out.format)
+            delivered = self._measure_delivered(st, out, target, timeout) if st.node.type == "LOUDNESS_VERSION" else None
         except AudioError:
             self._remove_partial(target)
             raise
+        if delivered is not None:
+            seconds += delivered.pop("seconds")
+            commands = commands + delivered.pop("commands")
         chain = self._provenance_chain(st)
-        return {"output_id": out.output_id, "status": "completed", "path": str(target), "format": out.format, "artifact": art.to_dict(),
+        extra = {"loudness": delivered} if delivered is not None else {}
+        art.path = final       # the staged file is moved into place unchanged once every output passed (same sha256)
+        return {"output_id": out.output_id, "status": "completed", "path": str(final), "format": out.format, "artifact": art.to_dict(), **extra,
                 "segments": [s.to_dict() for s in st.segments], "seconds": seconds, "tool_commands_observed": commands,
                 "provenance": {"skill": SKILL_ID, "skill_version": VERSION, "tool": "ffmpeg-skill/audio",
                                "tool_versions": dict(self.tool_versions),
                                "output_hash": art.sha256, "node_id": st.node.node_id, "operation_id": st.identity, "operations": chain,
                                "sources": {sid: {"path": s["path"], "sha256": s["sha256"], "size": s["size"]} for sid, s in sources.items() if any(seg.source_id == sid for seg in st.segments)}}}
+
+    def _measure_delivered(self, st: NodeState, out: Any, target: Path, timeout: Optional[float]) -> Dict[str, Any]:
+        """A LOUDNESS_SET version's delivered file is measured again (ffmpeg-skill/loudness --measure-only, required
+        at planning): a lossy encoder can move the true peak above the ceiling the intermediate held. The same checks
+        as the version apply."""
+        run = self.skill.run_tool("loudness", [str(target), "--measure-only"], timeout)
+        doc = run.data if isinstance(run.data, dict) else {}
+        result = next((doc[k] for k in ("result", "measured") if isinstance(doc.get(k), dict)), doc)
+        measured = self._loudness_numbers(result)
+        p = st.node.parameters
+        self._check_version(st, measured, f"output {out.output_id!r} (LOUDNESS_SET {p['loudness_set']} version {p['version_id']!r}, {out.format})")
+        return {"measured_by": "ffmpeg-skill/loudness --measure-only (delivered file)", "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"],
+                "tolerance_lufs": p["tolerance_lufs"], **measured, "seconds": run.seconds, "commands": list(run.commands)}
+
+    def loudness_sets(self, project: Any, out_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Summary of every LOUDNESS_SET: per version its target, ceiling, the intermediate's measurement and every
+        delivered output's own measurement (response key `loudness_sets`)."""
+        by_node: Dict[str, List[Dict[str, Any]]] = {}
+        for r in out_results:
+            prov = r.get("provenance") or {}
+            if prov.get("node_id"):
+                by_node.setdefault(prov["node_id"], []).append({"output_id": r["output_id"], "path": r["path"], "format": r.get("format"), "status": r["status"],
+                                                                "loudness": r.get("loudness")})
+        sets = []
+        for op in project.operations:
+            if op.type != "LOUDNESS_SET":
+                continue
+            versions = []
+            for v in op.parameters["versions"]:
+                nid = f"op:{op.op_id}.{v['version_id']}"
+                st = self._states.get(nid)
+                versions.append({"version_id": v["version_id"], "node_id": nid, "profile": v.get("profile"), "target_lufs": v["target_lufs"], "true_peak_db": v["true_peak_db"],
+                                 "status": st.status if st else "planned", "measured": (st.measurements.get("loudness") if st else None), "outputs": by_node.get(nid, [])})
+            sets.append({"op_id": op.op_id, "tolerance_lufs": op.parameters["tolerance_lufs"], "versions": versions})
+        return sets
 
     def _provenance_chain(self, st: NodeState) -> List[Dict[str, Any]]:
         """output -> operation -> ... -> source, as the executor observed it (status, hashes, tool)."""

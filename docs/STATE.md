@@ -5,8 +5,10 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
 
 ## CURRENT (main)
 
-- Skill `audio-production` 0.4.x, contract `audio-production/contract@1`, one tool `audio-production/run`, 16
-  operation types (VOICE_CLEANUP added 2026-10-30, ADR-16; FILLER_REMOVE and MIX `duck` 2026-10-31, ADR-18 / ADR-19); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
+- Skill `audio-production` 1.x, contract `audio-production/contract@1`, one tool `audio-production/run`, 17
+  operation types (VOICE_CLEANUP added 2026-10-30, ADR-16; FILLER_REMOVE and MIX `duck` 2026-10-31, ADR-18 / ADR-19;
+  LOUDNESS_SET 2026-11-12, ADR-23: several delivery loudness versions of one master, each re-measured, response key
+  `loudness_sets`; video-production-agent must re-pin before it can plan it); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
   `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS`, `VOICE_CLEANUP` take `audio_stream`
   (0-based, default 0) to pick which audio stream of their one input `ffmpeg-skill/audio` processes.
 - Execution through any ffmpeg-skill whose contract declares the required tools and flags — no version window
