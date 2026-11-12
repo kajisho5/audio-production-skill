@@ -10,7 +10,7 @@ from .adapter import FLAGS_USED, KNOWN_CONTRACT_VERSIONS, OPTIONAL_FLAGS_USED, S
 from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
 from .executor import CLEANUP_POLICIES, DURATION_TOLERANCE, TOOL_FOR, WORK_DIR_NAME
 from .fillers import LEXICON_PRESETS, MAX_RUN_TOKENS, RUN_MAX_GAP
-from .model import (CHANNEL_LAYOUTS, DUCK_FIELDS, DYNAMICS_STAGES, FORBIDDEN_KEYS, MAX_LEXICON_WORDS, MAX_WORDS, TRANSCRIPT_SCHEMA, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
+from .model import (CHANNEL_LAYOUTS, DUCK_FIELDS, LOUDNESS_PROFILES, LOUDNESS_VERSION_FIELDS, MAX_LOUDNESS_VERSIONS, DYNAMICS_STAGES, FORBIDDEN_KEYS, MAX_LEXICON_WORDS, MAX_WORDS, TRANSCRIPT_SCHEMA, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
                     OUTPUT_FORMATS, REF_RE, REQUEST_SCHEMA_ID, SAMPLE_RATES, UNSUPPORTED_OPERATIONS)
 
 CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
@@ -19,7 +19,7 @@ CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
 # `CapabilityContract.provides`), matching the ids already assigned to this Skill's
 # operations in that project's own docs/CAPABILITY_MATRIX.md. Every operation type maps
 # 1:1 to its own id (FADE_IN / FADE_OUT are `audio.fade_in` / `audio.fade_out`: a
-# registry keys capabilities by id, so one id per entry). All sixteen always write a
+# registry keys capabilities by id, so one id per entry). All seventeen always write a
 # validated audio artifact through the single `{SKILL_ID}/run` tool, so none is excluded
 # the way `thumbnail/validate` is elsewhere.
 CAPABILITY_IDS: Dict[str, str] = {
@@ -27,7 +27,7 @@ CAPABILITY_IDS: Dict[str, str] = {
     "FADE_IN": "audio.fade_in", "FADE_OUT": "audio.fade_out", "NORMALIZE": "audio.normalize", "MIX": "audio.mix",
     "MONO": "audio.mono", "STEREO": "audio.stereo", "DOWNMIX": "audio.downmix", "NOISE_REDUCTION": "audio.noise_reduction",
     "DYNAMICS": "audio.dynamics", "CONCAT": "audio.concat", "VOICE_CLEANUP": "audio.voice_cleanup",
-    "FILLER_REMOVE": "audio.filler_remove",
+    "FILLER_REMOVE": "audio.filler_remove", "LOUDNESS_SET": "audio.loudness_set",
 }
 
 
@@ -74,6 +74,11 @@ def _param_schema(ps: Dict[str, Any]) -> Dict[str, Any]:
         out["type"] = "object"
         out["schema"] = TRANSCRIPT_SCHEMA
         out["reads"] = ["schema", "segments[].words[].{start, end, text, confidence}", "id", "asset_id", "language"]
+    if ps["type"] == "loudness_versions":
+        out["type"] = "array"
+        out["min_items"], out["max_items"] = 1, MAX_LOUDNESS_VERSIONS
+        out["items"] = {"type": "object", "properties": {k: {kk: vv for kk, vv in v.items()} for k, v in LOUDNESS_VERSION_FIELDS.items()},
+                        "required": ["version_id"], "one_of": [["profile"], ["target_lufs", "true_peak_db"]], "additionalProperties": False}
     if ps["type"] == "lexicon":
         out["type"] = "object"
         out["properties"] = {"presets": {"type": "array", "items": {"type": "string", "enum": sorted(LEXICON_PRESETS)}},
@@ -100,13 +105,13 @@ def skill_contract() -> Dict[str, Any]:
               "inputs": ["request document (stdin)"], "input_type": REQUEST_SCHEMA_ID, "produces_output": True, "writes_media": True, "deterministic": True,
               "idempotency_hint": "content_equivalent; intermediates reused by deterministic operation id",
               "operations": sorted(OPERATION_TYPES), "supports": {"dry_run": True, "timeout": True, "cancel": True, "validate": True},
-              "verification": "every artifact is probed (audio stream, duration, channels, sample rate, codec, sha256); NORMALIZE is re-measured",
+              "verification": "every artifact is probed (audio stream, duration, channels, sample rate, codec, sha256); NORMALIZE is re-measured; every LOUDNESS_SET version and its delivered outputs are re-measured against tolerance and ceiling",
               "provenance": "OBSERVED", "mutates_input": False, "delegates_to": [f"ffmpeg-skill/{t}" for t in TOOLS_USED]}]
     return {
         "schema": CONTRACT_SCHEMA_ID, "skill_id": SKILL_ID, "id": SKILL_ID, "name": PACKAGE_NAME, "package": PACKAGE_NAME, "version": VERSION,
         "kind": "execution", "role": "audio production (processing); not measurement, not decision",
         "description": "Deterministic audio production execution: gain, sample-accurate trim / cut, silence removal (explicit ranges), filler removal (caller-supplied word timings), fades, EBU R128 loudness "
-                       "normalisation, mix (with sidechain ducking), concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), speech clean-up presets, format conversion and "
+                       "normalisation, several delivery loudness versions in one run, mix (with sidechain ducking), concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), speech clean-up presets, format conversion and "
                        "audio extraction from video containers; typed operation graph in, validated artifacts with provenance out. Not an AI agent.",
         "repository": "https://github.com/kajisho5/audio-production-skill",
         "not_provided": ["AI reasoning", "decisions", "production plans", "loudness or silence measurement for decisions (media-analysis-skill)", "speech recognition",
@@ -125,7 +130,10 @@ def skill_contract() -> Dict[str, Any]:
         "timeline": {"unit": "seconds (float)", "ranges": "half-open [start, end)", "mapping": "every artifact carries segments: timeline range <- source_id + source range",
                      "precision": f"TRIM / CUT / SILENCE_REMOVE / FILLER_REMOVE are sample-accurate (ffmpeg-skill/cut --accurate, precision reported per operation); every artifact duration is validated within {DURATION_TOLERANCE}s"},
         "loudness": {"standard": "EBU R128 / ITU-R BS.1770 via ffmpeg loudnorm (two-pass, linear)", "parameters": ["target_lufs", "true_peak_db", "loudness_range_lu", "tolerance_lufs", "sample_rate", "profile"],
-                     "defaults": "none for target / true peak: the caller or profile decides", "measurement_for_decisions": "media-analysis-skill (loudness kind); this skill only verifies its own output"},
+                     "defaults": "none for target / true peak: the caller or profile decides", "measurement_for_decisions": "media-analysis-skill (loudness kind); this skill only verifies its own output",
+                     "profiles": {k: dict(v) for k, v in LOUDNESS_PROFILES.items()}, "default_profile": None,
+                     "loudness_set": "LOUDNESS_SET writes several versions of one input in one run; each version must measure within tolerance_lufs of its target and at or under its "
+                                     "true-peak ceiling (no slack), on the intermediate and on every delivered output; response key loudness_sets"},
         "execution": {"mode": "local", "canonical_invocation": ["audio-production", "run", "-", "--json"], "stdin": REQUEST_SCHEMA_ID,
                       "stdout": f"exactly one {SKILL_ID}/response@{RESPONSE_SCHEMA_VERSION} document", "stderr": "diagnostics only",
                       "executables": ["python3 <ffmpeg-skill>/scripts/{probe,audio,cut,loudness,join}.py (argv lists)"], "executable_resolution": "ffmpeg-skill directory: --ffmpeg-skill, AUDIO_PRODUCTION_FFMPEG_SKILL_DIR, VIDEO_AGENT_FFMPEG_SKILL_DIR, ~/.claude/skills/ffmpeg-skill, ./vendor/ffmpeg-skill, ../ffmpeg-skill; ffmpeg/ffprobe: PATH lookup by ffmpeg-skill",

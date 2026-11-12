@@ -4,6 +4,8 @@ Node kinds:
   track node   "track:<id>"  reads a source; implicit TRIM (track.range) and GAIN (track.gain_db) are materialised
                              as explicit nodes "op:<track>.range" / "op:<track>.gain" so the graph is honest
   op node      "op:<id>"     one AudioOperation
+  version node "op:<id>.<version_id>"  one version of a LOUDNESS_SET (type LOUDNESS_VERSION, implicit); the set
+                             itself has no node of its own
 Every node has: node_id, type, inputs (node ids), parameters, dependencies (transitive closure is not stored), and
 an identity: sha256 of canonical {type, parameters, inputs' identities, tool version, source fingerprints}, computed
 by the executor once source fingerprints are known (graph.identity()). Nothing here depends on time or randomness."""
@@ -68,6 +70,14 @@ class OperationGraph:
         for op in p.operations:
             nid = f"op:{op.op_id}"
             inputs = [track_tail.get(ref, ref) for ref in op.inputs]
+            if op.type == "LOUDNESS_SET":
+                # one node per version, "op:<op_id>.<version_id>": each is its own two-pass loudnorm of the same input;
+                # the set is a grouping (parameters loudness_set / version_id), not an artifact
+                for v in op.parameters["versions"]:
+                    params = {k: v[k] for k in ("target_lufs", "true_peak_db", "loudness_range_lu", "sample_rate", "profile") if k in v}
+                    params.update(tolerance_lufs=op.parameters["tolerance_lufs"], loudness_set=op.op_id, version_id=v["version_id"])
+                    self._add(Node(f"{nid}.{v['version_id']}", "LOUDNESS_VERSION", list(inputs), params, implicit=True))
+                continue
             self._add(Node(nid, op.type, inputs, dict(op.parameters)))
         for node in self.nodes.values():
             for i in node.inputs:

@@ -574,3 +574,69 @@ def test_mix_ducks_the_bed_under_input_0(workspace, skill_dir):
         assert d["ok"] and "--duck-threshold -35.000" in results(d)["op:m"]["measurements"]["duck"]["ffmpeg_skill_flags"], d.get("error")
     else:
         assert d["error"]["code"] == "TOOL_ERROR" and d["error"]["details"]["reason"] == "ffmpeg_skill_flag_missing", d
+
+
+def loudness_set_doc(source, versions, outputs, tolerance=0.5):
+    return request_doc([op("deliver", "LOUDNESS_SET", ["track:t1"], tolerance_lufs=tolerance, versions=versions)],
+                       outputs=outputs, sources=[{"source_id": "a", "path": source}])
+
+
+def test_loudness_set_three_versions_in_one_run(workspace):
+    # ECOSYSTEM_ROADMAP step 9 "Done when": three versions of one master, each within 0.5 LU of its target and never
+    # above its true-peak ceiling, measured on the intermediate and again on every delivered file
+    versions = [{"version_id": "web", "target_lufs": -14, "true_peak_db": -1}, {"version_id": "ebu", "profile": "ebu_r128"},
+                {"version_id": "atsc", "profile": "atsc_a85"}]
+    outputs = [{"output_id": "web", "operation": "op:deliver.web", "path": "out/web.wav", "format": "wav"},
+               {"output_id": "web_aac", "operation": "op:deliver.web", "path": "out/web.m4a", "format": "m4a"},
+               {"output_id": "ebu", "operation": "op:deliver.ebu", "path": "out/ebu.wav", "format": "wav"},
+               {"output_id": "atsc", "operation": "op:deliver.atsc", "path": "out/atsc.flac", "format": "flac"}]
+    code, d = run(loudness_set_doc("programme.wav", versions, outputs))
+    assert code == 0 and d["ok"], d.get("error")
+    (s,) = d["loudness_sets"]
+    want = {"web": (-14.0, -1.0, None), "ebu": (-23.0, -1.0, "ebu_r128"), "atsc": (-24.0, -2.0, "atsc_a85")}
+    assert [v["version_id"] for v in s["versions"]] == ["web", "ebu", "atsc"] and s["tolerance_lufs"] == 0.5
+    for v in s["versions"]:
+        target, ceiling, profile = want[v["version_id"]]
+        assert (v["target_lufs"], v["true_peak_db"], v["profile"], v["status"]) == (target, ceiling, profile, "completed")
+        m = v["measured"]
+        assert abs(m["integrated_lufs"] - target) <= 0.5 and m["true_peak_dbtp"] <= ceiling, v
+        assert v["outputs"], v
+        for o in v["outputs"]:
+            lm = o["loudness"]
+            assert o["status"] == "completed" and lm["measured_by"].endswith("(delivered file)")
+            assert abs(lm["integrated_lufs"] - target) <= 0.5 and lm["true_peak_dbtp"] <= ceiling, o
+    # the versions really differ, and the -14 one is close to its ceiling (the fixture's crest makes the ceiling matter)
+    by_id = {v["version_id"]: v["measured"] for v in s["versions"]}
+    assert by_id["web"]["true_peak_dbtp"] > -2.5 and by_id["ebu"]["integrated_lufs"] - by_id["atsc"]["integrated_lufs"] > 0.5
+    r = results(d)
+    assert {n for n, x in r.items() if x["type"] == "LOUDNESS_VERSION"} == {"op:deliver.web", "op:deliver.ebu", "op:deliver.atsc"}
+    assert all(r[n]["implicit"] and r[n]["parameters"]["loudness_set"] == "deliver" for n in ("op:deliver.web", "op:deliver.ebu", "op:deliver.atsc"))
+    assert {o["output_id"] for o in d["outputs"]} == {"web", "web_aac", "ebu", "atsc"} and all("loudness" in o for o in d["outputs"])
+    assert all((workspace / "out" / f).is_file() for f in ("web.wav", "web.m4a", "ebu.wav", "atsc.flac"))
+
+
+def test_loudness_set_refuses_an_unreachable_version(workspace):
+    # a crest factor of about 20 dB: -14 LUFS under -1 dBTP is out of reach of loudnorm's linear gain; the version is
+    # named, its numbers are reported, and no version of the set is delivered
+    versions = [{"version_id": "ebu", "profile": "ebu_r128"}, {"version_id": "web", "target_lufs": -14, "true_peak_db": -1}]
+    outputs = [{"output_id": "ebu", "operation": "op:deliver.ebu", "path": "out/ebu.wav", "format": "wav"},
+               {"output_id": "web", "operation": "op:deliver.web", "path": "out/web.wav", "format": "wav"}]
+    code, d = run(loudness_set_doc("peaky.wav", versions, outputs))
+    assert not d["ok"] and d["error"]["code"] == "VALIDATION_ERROR" and code == EXIT_CODES["VALIDATION_ERROR"]
+    det = d["error"]["details"]
+    assert det["version_id"] == "web" and det["reason"] in ("loudness_off_target", "true_peak_exceeded") and det["measured_lufs"] is not None
+    assert results(d)["op:deliver.web"]["status"] == "failed" and not (workspace / "out").exists()
+    assert {v["version_id"]: v["status"] for v in d["loudness_sets"][0]["versions"]} == {"ebu": "completed", "web": "failed"}
+
+
+def test_loudness_set_dry_run_and_set_reference(workspace):
+    versions = [{"version_id": "jp", "profile": "arib_tr_b32"}]
+    outputs = [{"output_id": "jp", "operation": "op:deliver.jp", "path": "out/jp.wav", "format": "wav"}]
+    code, out, err = run_cli(["plan", "-", "--json"], json.dumps(loudness_set_doc("tone.wav", versions, outputs)))
+    d = one_json(out)
+    assert d["ok"] and d["dry_run"] and d["loudness_sets"][0]["versions"][0]["status"] == "planned"
+    assert d["loudness_sets"][0]["versions"][0]["target_lufs"] == -24.0 and d["loudness_sets"][0]["versions"][0]["true_peak_db"] == -1.0
+    assert [s["tool"] for s in d["plan"]["steps"]] == ["ffmpeg-skill/loudness"] and not (workspace / "out").exists()
+    bad = loudness_set_doc("tone.wav", versions, [{"output_id": "jp", "operation": "op:deliver", "path": "out/jp.wav", "format": "wav"}])
+    code, d = run(bad)
+    assert d["error"]["code"] == "INVALID_REQUEST" and d["error"]["details"]["versions"] == ["op:deliver.jp"]

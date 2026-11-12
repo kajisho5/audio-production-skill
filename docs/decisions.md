@@ -232,3 +232,27 @@
     CHANGELOG entry are unchanged. From here on a major release happens only when a person applies the label.
   - *Tests.* `tests/test_release_labels.py`.
   - *Release.* A patch release (1.0.1).
+- **ADR-23 LOUDNESS_SET: several delivery loudness versions of one master in one run (roadmap step 9).**
+  - *Shape.* One operation, one input, `versions` (1..8) and a required `tolerance_lufs`. Each version names a
+    profile (`ebu_r128` −23 LUFS / −1 dBTP, `atsc_a85` −24 LKFS / −2 dBTP, regional `arib_tr_b32` −24 LKFS / −1 dBTP)
+    or states `target_lufs` + `true_peak_db` (a streaming platform's own value, e.g. −14 / −1). No profile and no
+    target is a default; a regional profile is only used when a version names it.
+  - *Graph.* The set expands into one implicit node per version, `op:<op_id>.<version_id>` of type
+    `LOUDNESS_VERSION`, each a two-pass loudnorm of the same input through `ffmpeg-skill/loudness` (identical argv to
+    NORMALIZE). The set itself has no artifact: referencing `op:<op_id>` is refused with the list of its versions, so
+    a streaming and a broadcast version cannot be swapped by referencing "the" loudness output. Every version must be
+    delivered (an unreferenced version is an unconnected operation, as for any op).
+  - *Verification.* Each version is measured (the call's own `result`) and refused unless within `tolerance_lufs` of
+    its target and at or under its ceiling with no slack (NORMALIZE allows +0.5 dB). Each delivered output of a
+    version is measured again with `loudness --measure-only` (a lossy encoder can raise the true peak) against the
+    same rules; a failing output is removed. The response carries `loudness_sets` (per version: target, ceiling,
+    profile, the intermediate's measurement, every output's measurement). On failure nothing is delivered, as for
+    every other failure.
+  - *Rejected.* A limiter stage before loudnorm through `audio.py --limit`: ffmpeg-skill's alimiter is not
+    latency-compensated and shifts the audio by its look-ahead (measured: 239 samples at 48 kHz), which would put a
+    delivery version out of sync with picture. A master whose crest factor keeps a target out of reach under the
+    ceiling is refused, naming the version; the gap is handed to ffmpeg-skill (docs/ffmpeg-skill.md).
+  - *Contract.* An operation added (`LOUDNESS_SET`, capability `audio.loudness_set`), the tools' `verification`
+    text, and additive `loudness.profiles`; the agent must re-pin before it can plan it. Measured (FFmpeg 6.1, the
+    `programme.wav` fixture, −20.5 LUFS / −8.0 dBTP): −14 / −1 → −14.02 LUFS, −1.45 dBTP; EBU R128 → −23.02, −10.45;
+    ATSC A/85 → −24.02, −11.45, the same on the delivered files.

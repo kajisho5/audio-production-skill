@@ -84,6 +84,7 @@ is checked as soon as it lands.
 |---|---|---|
 | CHANNEL_MAP (arbitrary mapping / pan) | only `--mono`, `--stereo`, `--downmix` | provided as MONO / STEREO / DOWNMIX; `CHANNEL_MAP` not implemented |
 | RESAMPLE (standalone) | `audio.py` has no sample-rate flag; only `loudness.py --sample-rate` and `join.py --sample-rate` | `NORMALIZE.sample_rate`, `CONCAT.sample_rate`; `RESAMPLE` not implemented; outputs may declare `expect.sample_rate` for verification |
+| LOUDNESS_SET version the master cannot reach under the ceiling with a linear gain (high crest factor) | `loudness.py` always runs loudnorm `linear=true` and has no limiter stage; `audio.py --limit` (alimiter) delays its output by the look-ahead (attack, 5 ms by default: a click at sample 4800 came out at 5039, FFmpeg 6.1) because ffmpeg-skill does not set alimiter `latency=1` | the version is refused with `VALIDATION_ERROR` (`loudness_off_target` / `true_peak_exceeded`) naming it, instead of a limiter that would shift the version against picture; requested from ffmpeg-skill: a latency-compensated limiter (alimiter `latency=1`) or a true-peak limiter stage in `loudness.py` |
 | MIX per-input pan, more than one bed per call | `--music` takes one file | pairwise fold; no pan |
 | 24-bit intermediates | `.wav` → `pcm_s16le` fixed | 16-bit PCM intermediates |
 | capability detection of core filters (`volume`, `afade`, `amix`, `pan`, `aformat`) | ffmpeg-skill doctor lists only its own table | reported `unknown`, verified per run |
