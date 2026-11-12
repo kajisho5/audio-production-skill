@@ -709,10 +709,17 @@ def parse_request(doc: Any) -> AudioRequest:
             raise AudioError("INVALID_REQUEST", f"{where}: {ref!r} is a LOUDNESS_SET; reference one of its versions: {sorted('op:' + x for x in versions)}",
                              {"ref": ref, "reason": "loudness_set_reference", "versions": sorted("op:" + x for x in versions)})
 
+    # a LOUDNESS_SET version is a delivery: only outputs reference it (a later operation would change the loudness its
+    # measurement vouches for, and the delivered file would no longer be the version that was verified)
+    versions = {vid for op in operations for vid in loudness_version_ids(op)}
+
     # reference existence (cycles / ordering are checked by graph.py)
     for op in operations:
         for ref in op.inputs:
             _not_a_set(ref, f"operation {op.op_id!r}")
+            if parse_ref(ref, "")[1] in versions and ref.startswith("op:"):
+                raise AudioError("INVALID_REQUEST", f"operation {op.op_id!r}: {ref!r} is a LOUDNESS_SET version, which only an output may reference "
+                                 "(process before the set, not after it)", {"op_id": op.op_id, "ref": ref, "reason": "loudness_version_not_terminal"})
             kind, ident = parse_ref(ref, "")
             if kind == "track" and ident not in track_ids or kind == "op" and ident not in op_ids:
                 raise AudioError("MISSING_INPUT", f"operation {op.op_id!r} references unknown {kind} {ident!r}", {"op_id": op.op_id, "ref": ref})

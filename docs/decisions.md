@@ -241,13 +241,17 @@
     `LOUDNESS_VERSION`, each a two-pass loudnorm of the same input through `ffmpeg-skill/loudness` (identical argv to
     NORMALIZE). The set itself has no artifact: referencing `op:<op_id>` is refused with the list of its versions, so
     a streaming and a broadcast version cannot be swapped by referencing "the" loudness output. Every version must be
-    delivered (an unreferenced version is an unconnected operation, as for any op).
+    delivered (an unreferenced version is an unconnected operation, as for any op), and only outputs may reference a
+    version (`loudness_version_not_terminal`): an operation after it would change what its measurement vouches for.
   - *Verification.* Each version is measured (the call's own `result`) and refused unless within `tolerance_lufs` of
     its target and at or under its ceiling with no slack (NORMALIZE allows +0.5 dB). Each delivered output of a
     version is measured again with `loudness --measure-only` (a lossy encoder can raise the true peak) against the
-    same rules; a failing output is removed. The response carries `loudness_sets` (per version: target, ceiling,
-    profile, the intermediate's measurement, every output's measurement). On failure nothing is delivered, as for
-    every other failure.
+    same rules (`loudness --measure-only` is required at planning for a set). The response carries `loudness_sets` (per version: target, ceiling,
+    profile, the intermediate's measurement, every output's measurement).
+  - *Outputs are committed together (all outputs, not only a set's).* Every output is written to a staging file next
+    to its target (`.<name>.staged<ext>`), validated (and measured), and the targets are replaced only once every
+    output passed. A failing output therefore leaves no output of the run behind and never replaces a pre-existing
+    target set to `overwrite: true`; before, outputs exported ahead of the failing one stayed in place.
   - *Rejected.* A limiter stage before loudnorm through `audio.py --limit`: ffmpeg-skill's alimiter is not
     latency-compensated and shifts the audio by its look-ahead (measured: 239 samples at 48 kHz), which would put a
     delivery version out of sync with picture. A master whose crest factor keeps a target out of reach under the

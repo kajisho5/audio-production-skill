@@ -499,12 +499,16 @@ def test_loudness_set_parameters():
 def test_loudness_set_graph_and_references():
     ops = [{"op_id": "d", "type": "LOUDNESS_SET", "inputs": ["track:t1"], "parameters": {"tolerance_lufs": 0.5, "versions": [
         {"version_id": "web", "target_lufs": -14, "true_peak_db": -1}, {"version_id": "ebu", "profile": "ebu_r128"}]}},
-           {"op_id": "f", "type": "FADE_OUT", "inputs": ["op:d.ebu"], "parameters": {"duration": 1}}]
-    outs = [{"output_id": "w", "operation": "op:d.web", "path": "o/w.wav", "format": "wav"}, {"output_id": "e", "operation": "op:f", "path": "o/e.wav", "format": "wav"}]
+           ]
+    outs = [{"output_id": "w", "operation": "op:d.web", "path": "o/w.wav", "format": "wav"}, {"output_id": "e", "operation": "op:d.ebu", "path": "o/e.wav", "format": "wav"}]
     g = OperationGraph(parse_request(request_doc(ops, outputs=outs)).project)
     assert "op:d" not in g.nodes and g.nodes["op:d.web"].type == "LOUDNESS_VERSION" and g.nodes["op:d.web"].implicit
     assert g.nodes["op:d.ebu"].parameters == {"profile": "ebu_r128", "target_lufs": -23.0, "true_peak_db": -1.0, "tolerance_lufs": 0.5, "loudness_set": "d", "version_id": "ebu"}
-    assert g.nodes["op:f"].inputs == ["op:d.ebu"] and g.output_nodes == {"w": "op:d.web", "e": "op:f"}
+    assert g.output_nodes == {"w": "op:d.web", "e": "op:d.ebu"}
+    # a version is a delivery: an operation after it would change what its measurement vouches for
+    fade = [{"op_id": "f", "type": "FADE_OUT", "inputs": ["op:d.ebu"], "parameters": {"duration": 1}}]
+    e = err(parse_request, "INVALID_REQUEST", request_doc(ops + fade, outputs=outs[:1] + [{"output_id": "e", "operation": "op:f", "path": "o/e.wav", "format": "wav"}]))
+    assert e.details["reason"] == "loudness_version_not_terminal"
     # the set itself is not an artifact; an unreferenced version is an unconnected operation; ids must not collide
     e = err(parse_request, "INVALID_REQUEST", request_doc(ops, outputs=[{"output_id": "w", "operation": "op:d", "path": "o/w.wav", "format": "wav"}] + outs[1:]))
     assert e.details["reason"] == "loudness_set_reference" and e.details["versions"] == ["op:d.ebu", "op:d.web"]

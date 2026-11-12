@@ -11,6 +11,7 @@ Every intermediate is PCM WAV in <workspace>/.audio-production/<project_id>/<ide
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -218,15 +219,30 @@ class Executor:
                 cancelled = e.code == "CANCELLED"
                 break
         out_results: List[Dict[str, Any]] = []
+        staged: List[Tuple[Path, Path, Any]] = []
         if failure is None:
+            # every output is written to a staging file next to its target and validated; the targets are replaced
+            # only once all of them passed, so a failing output never leaves earlier outputs of the run behind and
+            # never replaces a pre-existing target (overwrite: true) with a run that did not succeed
             for o in project.outputs:
                 try:
                     out_results.append(self._export(states[graph.output_nodes[o.output_id]], o, outputs[o.output_id], sources, timeout))
+                    staged.append((self.staging_path(outputs[o.output_id]), outputs[o.output_id], o))
                 except AudioError as e:
                     failure = e
                     cancelled = e.code == "CANCELLED"
                     out_results.append({"output_id": o.output_id, "status": "cancelled" if cancelled else "failed", "path": str(outputs[o.output_id]), "error": e.to_dict()})
                     break
+            if failure is None:
+                try:
+                    self._commit_outputs(staged)
+                except AudioError as e:
+                    failure = e
+                    for r in out_results:
+                        r["status"] = "failed"
+            if failure is not None:
+                for tmp, _, _ in staged:
+                    self._remove_partial(tmp)
         for n in graph.order:
             if states[n].status == "planned":
                 states[n].status = "skipped"
@@ -322,6 +338,10 @@ class Executor:
             if "duck" in p:
                 # refused here, at planning (dry run included), when the located ffmpeg-skill cannot duck as asked
                 st.measurements["duck"] = {**p["duck"], "key_input": 0, "ffmpeg_skill_flags": " ".join(self._duck_flags(p["duck"], where))}
+        elif node.type == "LOUDNESS_VERSION":
+            # every delivered output of a version is measured again: refused at planning when that cannot happen
+            self._require_flags("loudness", ("measure_only",), where, "LOUDNESS_SET (measurement of every delivered version)")
+            st.segments = list(ins[0].segments)
         elif node.type == "CONCAT":
             st.segments = concat([i.segments for i in ins], p.get("crossfade", 0.0))
         elif node.type == "VOICE_CLEANUP":
@@ -723,28 +743,44 @@ class Executor:
         gain (a high crest factor) is refused here, naming the version, instead of being delivered quieter or hotter."""
         p = st.node.parameters
         got, tp, tol = measured.get("integrated_lufs"), measured.get("true_peak_dbtp"), p["tolerance_lufs"]
+        got = got if isinstance(got, float) and math.isfinite(got) else None      # NaN / inf never pass a comparison
+        tp = tp if isinstance(tp, float) and math.isfinite(tp) else None
         details = {"version_id": p["version_id"], "loudness_set": p["loudness_set"], "measured_lufs": got, "measured_true_peak_dbtp": tp,
                    "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"], "tolerance_lufs": tol}
         if got is None or abs(got - p["target_lufs"]) > tol:
             raise AudioError("VALIDATION_ERROR", f"{what}: measured {got} LUFS is not within {tol} LU of {p['target_lufs']} LUFS "
                              f"(true peak {tp} dBTP, ceiling {p['true_peak_db']} dBTP: a linear gain to the target would pass the ceiling)"
-                             if got is not None and tp is not None and got < p["target_lufs"] else
+                             if got is not None and tp is not None and got < p["target_lufs"] and tp + (p["target_lufs"] - got) > p["true_peak_db"] else
                              f"{what}: measured {got} LUFS is not within {tol} LU of {p['target_lufs']} LUFS", {"reason": "loudness_off_target", **details})
         if tp is None or tp > p["true_peak_db"]:
             raise AudioError("VALIDATION_ERROR", f"{what}: true peak {tp} dBTP is above the ceiling {p['true_peak_db']} dBTP", {"reason": "true_peak_exceeded", **details})
 
     # ---- outputs
-    def _export(self, st: NodeState, out: Any, target: Path, sources: Dict[str, Dict[str, Any]], timeout: Optional[float]) -> Dict[str, Any]:
+    @staticmethod
+    def staging_path(target: Path) -> Path:
+        """Where an output is written and validated before it replaces its target (same directory, same extension)."""
+        return target.with_name(f".{target.stem}.staged{target.suffix}")
+
+    def _commit_outputs(self, staged: List[Tuple[Path, Path, Any]]) -> None:
+        for _, target, out in staged:
+            if target.exists() and not out.overwrite:
+                raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} appeared during execution", {"reason": "exists", "path": str(target)})
+        for tmp, target, out in staged:
+            try:
+                os.replace(str(tmp), str(target))
+            except OSError as e:
+                raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} could not be moved into place: {e}", {"reason": "commit_failed", "path": str(target)})
+
+    def _export(self, st: NodeState, out: Any, final: Path, sources: Dict[str, Dict[str, Any]], timeout: Optional[float]) -> Dict[str, Any]:
         src = self._artifact_path(st, sources)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        existed = target.exists()
-        if existed and not out.overwrite:
-            raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} appeared during execution", {"reason": "exists", "path": str(target)})
+        final.parent.mkdir(parents=True, exist_ok=True)
+        if final.exists() and not out.overwrite:
+            raise AudioError("OUTPUT_ERROR", f"output {out.output_id!r} appeared during execution", {"reason": "exists", "path": str(final)})
+        target = self.staging_path(final)
+        self._remove_partial(target)
         seconds, commands = 0.0, []
         try:
             args = [src, "-o", str(target)]
-            if out.overwrite and self.skill.takes_flag("audio", "overwrite"):
-                args.append("--overwrite")   # ffmpeg-skill >= 1.10 refuses to replace an existing file without it
             run: ToolRun = self.skill.run_tool("audio", args, timeout)
             seconds, commands = run.seconds, run.commands
             export_state = NodeState(Node(f"output:{out.output_id}", "EXPORT", [st.node.node_id]), stable_hash({"export": st.identity, "format": out.format}))
@@ -759,18 +795,18 @@ class Executor:
             commands = commands + delivered.pop("commands")
         chain = self._provenance_chain(st)
         extra = {"loudness": delivered} if delivered is not None else {}
-        return {"output_id": out.output_id, "status": "completed", "path": str(target), "format": out.format, "artifact": art.to_dict(), **extra,
+        art.path = final       # the staged file is moved into place unchanged once every output passed (same sha256)
+        return {"output_id": out.output_id, "status": "completed", "path": str(final), "format": out.format, "artifact": art.to_dict(), **extra,
                 "segments": [s.to_dict() for s in st.segments], "seconds": seconds, "tool_commands_observed": commands,
                 "provenance": {"skill": SKILL_ID, "skill_version": VERSION, "tool": "ffmpeg-skill/audio",
                                "tool_versions": dict(self.tool_versions),
                                "output_hash": art.sha256, "node_id": st.node.node_id, "operation_id": st.identity, "operations": chain,
                                "sources": {sid: {"path": s["path"], "sha256": s["sha256"], "size": s["size"]} for sid, s in sources.items() if any(seg.source_id == sid for seg in st.segments)}}}
 
-    def _measure_delivered(self, st: NodeState, out: Any, target: Path, timeout: Optional[float]) -> Optional[Dict[str, Any]]:
-        """A LOUDNESS_SET version's delivered file is measured again (ffmpeg-skill/loudness --measure-only): a lossy
-        encoder can move the true peak above the ceiling the intermediate held. The same checks as the version apply."""
-        if not self.skill.takes_flag("loudness", "measure_only"):
-            return None
+    def _measure_delivered(self, st: NodeState, out: Any, target: Path, timeout: Optional[float]) -> Dict[str, Any]:
+        """A LOUDNESS_SET version's delivered file is measured again (ffmpeg-skill/loudness --measure-only, required
+        at planning): a lossy encoder can move the true peak above the ceiling the intermediate held. The same checks
+        as the version apply."""
         run = self.skill.run_tool("loudness", [str(target), "--measure-only"], timeout)
         doc = run.data if isinstance(run.data, dict) else {}
         result = next((doc[k] for k in ("result", "measured") if isinstance(doc.get(k), dict)), doc)

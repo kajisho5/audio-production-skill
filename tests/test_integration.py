@@ -640,3 +640,23 @@ def test_loudness_set_dry_run_and_set_reference(workspace):
     bad = loudness_set_doc("tone.wav", versions, [{"output_id": "jp", "operation": "op:deliver", "path": "out/jp.wav", "format": "wav"}])
     code, d = run(bad)
     assert d["error"]["code"] == "INVALID_REQUEST" and d["error"]["details"]["versions"] == ["op:deliver.jp"]
+
+
+def test_a_failing_output_leaves_no_output_of_the_run_behind(workspace):
+    # outputs are staged and validated first, then moved into place together: the second output fails its expectation,
+    # so the first is not delivered either and a pre-existing target (overwrite: true) keeps its old content
+    (workspace / "out").mkdir()
+    (workspace / "out" / "a.wav").write_bytes(b"old")
+    outputs = [{"output_id": "a", "operation": "op:g", "path": "out/a.wav", "format": "wav", "overwrite": True},
+               {"output_id": "b", "operation": "op:g", "path": "out/b.flac", "format": "flac"},
+               {"output_id": "c", "operation": "op:g", "path": "out/c.wav", "format": "wav", "expect": {"duration": 3.0}}]
+    code, out, err = run_cli(["run", "-", "--json"], json.dumps(request_doc([op("g", "GAIN", ["track:t1"], gain_db=-3)], outputs=outputs)))
+    d = one_json(out)
+    assert d["error"]["code"] == "VALIDATION_ERROR" and d["error"]["details"]["reason"] == "duration_mismatch"
+    assert sorted(p.name for p in (workspace / "out").iterdir()) == ["a.wav"] and (workspace / "out" / "a.wav").read_bytes() == b"old"
+    outputs[2].pop("expect")
+    code, out, err = run_cli(["run", "-", "--json"], json.dumps(request_doc([op("g", "GAIN", ["track:t1"], gain_db=-3)], outputs=outputs)))
+    d = one_json(out)
+    assert d["ok"], d.get("error")
+    assert sorted(p.name for p in (workspace / "out").iterdir()) == ["a.wav", "b.flac", "c.wav"] and probe(workspace / "out" / "a.wav")["duration"] > 5
+    assert all(o["artifact"]["path"] == o["path"] for o in d["outputs"])
