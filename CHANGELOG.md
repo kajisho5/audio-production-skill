@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.1.0 - 2026-11-12
+
+- feat: LOUDNESS_SET, several delivery loudness versions in one run (roadmap step 9) (#32) (5694443)
+
 ## v1.0.1 - 2026-11-11
 
 - fix(release): Dependabot labels cannot raise the release level (#31) (8fbf60b)
