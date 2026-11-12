@@ -62,6 +62,8 @@ TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
     "NOISE_REDUCTION": ("audio", ["filter:afftdn"]),
     "DYNAMICS": ("audio", ["filter:acompressor", "filter:alimiter", "filter:agate"]),
     "VOICE_CLEANUP": ("audio", ["filter:highpass", "filter:deesser", "filter:afftdn", "filter:acompressor", "filter:alimiter"]),
+    "STEMS": ("audio", ["filter:amix"]),
+    "STEM": ("audio", ["filter:amix"]),                       # graph node of one STEMS stem
     "CONCAT": ("join", ["filter:acrossfade"]),
     "EXPORT": ("audio", []),
 }
@@ -202,6 +204,8 @@ class Executor:
             body0: Dict[str, Any] = {"dry_run": True, "plan": plan, "results": [states[n].to_dict() for n in graph.order], "outputs": plan["outputs"]}
             if any(o.type == "LOUDNESS_SET" for o in project.operations):
                 body0["loudness_sets"] = self.loudness_sets(project, [])
+            if any(o.type == "STEMS" for o in project.operations):
+                body0["stems"] = self.stems_summary(project, [])
             return self._envelope(True, "ok", body0)
 
         # execute
@@ -250,6 +254,8 @@ class Executor:
                                 "tool_runs": [self._tool_run_dict(r) for r in self.skill.runs]}
         if any(o.type == "LOUDNESS_SET" for o in project.operations):
             body["loudness_sets"] = self.loudness_sets(project, out_results)
+        if any(o.type == "STEMS" for o in project.operations):
+            body["stems"] = self.stems_summary(project, out_results)
         if failure is not None:
             body["error"] = failure.to_dict()
             body["cleanup"] = {"policy": self.cleanup, "applied": False, "reason": "run did not succeed; intermediates are kept for diagnosis and reuse"}
@@ -342,6 +348,13 @@ class Executor:
             # every delivered output of a version is measured again: refused at planning when that cannot happen
             self._require_flags("loudness", ("measure_only",), where, "LOUDNESS_SET (measurement of every delivered version)")
             st.segments = list(ins[0].segments)
+        elif node.type == "STEM":
+            st.segments = mix([i.segments for i in ins])          # the programme: input 0's duration, as MIX
+            if 0 not in p["members"]:
+                # a stem without input 0 is conformed to the programme through ffmpeg-skill/audio --replace (padded / trimmed)
+                self._require_flags("audio", ("replace",), where, "STEMS (a stem without input 0)")
+            self._require_flags("loudness", ("measure_only",), where, "STEMS (headroom check of every stem)")
+            st.measurements["stem"] = {"stem_id": p["stem_id"], "role": p.get("role"), "members": [node.inputs[k] for k in p["members"]]}
         elif node.type == "CONCAT":
             st.segments = concat([i.segments for i in ins], p.get("crossfade", 0.0))
         elif node.type == "VOICE_CLEANUP":
@@ -433,6 +446,8 @@ class Executor:
             if "channels" in node.parameters:
                 return int(node.parameters["channels"])
             return max(self._expected_channels(states, states[i], sources) for i in node.inputs)   # ffmpeg-skill/join: widest clip
+        if node.type == "STEM":
+            return self._expected_channels(states, states[node.inputs[node.parameters["members"][0]]], sources)   # its main track
         return self._expected_channels(states, states[node.inputs[0]], sources)
 
     def _plan_document(self, graph: OperationGraph, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], outputs: Dict[str, Path],
@@ -527,6 +542,32 @@ class Executor:
             if "channels" in p:
                 args += ["--channels", str(int(p["channels"]))]
             return [("join", args + ["-o", o])]
+        if node.type == "STEM":
+            # the stem's inputs at the levels of the mix they sum to; input 0 (the programme) is the main track when it
+            # is a member, otherwise the first member replaces input 0's audio (ffmpeg-skill/audio --replace pads /
+            # trims it to input 0's duration) and the other members are folded on top through --music
+            members = list(p["members"])
+            gains = dict(zip(members, p["gains_db"]))
+            programme = self._artifact_path(states[node.inputs[0]], sources)
+            first = members[0]
+            head = [programme] if first == 0 else [programme, "--replace", self._artifact_path(states[node.inputs[first]], sources)]
+            if gains[first]:
+                head += ["--gain", fmt_db(gains[first])]
+            rest = members[1:]
+            if not rest:
+                return [("audio", head + ["-o", o])]
+            calls: List[Tuple[str, List[str]]] = []
+            if first != 0:
+                # the replacement is conformed to the programme's length on its own first: amix (duration=first) in the
+                # same call would end every other member where the replacement ends
+                calls.append(("audio", head + ["-o", f"{o[:-4]}.mix1.wav"]))
+            main = calls[-1][1][-1] if calls else None
+            for j, m in enumerate(rest):
+                target = o if j == len(rest) - 1 else f"{o[:-4]}.mix{len(calls) + 1}.wav"
+                args = (head if main is None else [main]) + ["--music", self._artifact_path(states[node.inputs[m]], sources), "--music-volume", fmt_db(gains[m])]
+                calls.append(("audio", args + ["-o", target]))
+                main = target
+            return calls
         if node.type == "MIX":
             # pairwise fold through ffmpeg-skill/audio --music (main + one bed per call); intermediates next to the output.
             # With duck, the ducked bed is folded first, keyed by input 0 alone (sidechaincompress inside that call);
@@ -537,7 +578,7 @@ class Executor:
                 order.remove(duck["input"])
                 order.insert(1, duck["input"])
             live = [(self._artifact_path(states[node.inputs[i]], sources), p["levels"][i]["gain_db"]) for i in order if not p["levels"][i]["mute"]]
-            calls: List[Tuple[str, List[str]]] = []
+            calls = []
             main_path, main_gain = live[0]
             if len(live) == 1:
                 return [("audio", [main_path, "--gain", fmt_db(main_gain), "-o", o])]
@@ -589,6 +630,9 @@ class Executor:
                 if tool == "loudness":
                     loudness_data = run.data
             st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources))
+            if node.type == "STEM":
+                self._check_stem_length(st, states[node.inputs[0]], sources)
+                self._check_stem_headroom(st, out_path, timeout)
             if node.type in LOUDNESS_NODE_TYPES:
                 if not isinstance((loudness_data or {}).get("result"), dict) and self.skill.takes_flag("loudness", "measure_only"):
                     loudness_data = self._measure_loudness(st, out_path, timeout)
@@ -604,6 +648,59 @@ class Executor:
                                         "tool": f"ffmpeg-skill/{st.tool}", "tool_versions": dict(self.tool_versions),
                                         "skill": SKILL_ID, "skill_version": VERSION}, indent=2, sort_keys=True), encoding="utf-8")
         st.status = "completed"
+
+    def _check_stem_length(self, st: NodeState, programme: NodeState, sources: Dict[str, Dict[str, Any]]) -> None:
+        """A stem has exactly the programme's sample count (input 0's), else VALIDATION_ERROR: a stem one sample
+        longer or shorter no longer lines up with the mix it is delivered beside."""
+        art = st.artifact
+        ref = programme.artifact
+        if art is None or ref is None:
+            raise AudioError("INTERNAL_ERROR", f"STEM {st.node.node_id}: no artifact to measure")
+        samples, want = round(art.duration * art.sample_rate), round(ref.duration * ref.sample_rate)
+        st.measurements["stem"].update(samples=samples, programme_samples=want, sample_rate=art.sample_rate)
+        if art.sample_rate != ref.sample_rate or samples != want:
+            raise AudioError("VALIDATION_ERROR", f"STEM {st.node.node_id}: {samples} samples at {art.sample_rate} Hz, the programme has {want} at {ref.sample_rate} Hz",
+                             {"reason": "stem_length_mismatch", "samples": samples, "programme_samples": want, "sample_rate": art.sample_rate,
+                              "programme_sample_rate": ref.sample_rate})
+
+    def _check_stem_headroom(self, st: NodeState, out_path: Path, timeout: Optional[float]) -> None:
+        """Every fold writes 16-bit PCM, so a stem (or a mix) that reaches full scale is clipped, and where it clips
+        depends on how the inputs are grouped: clipped stems no longer sum to the mix. A stem whose true peak
+        (ffmpeg-skill/loudness --measure-only) reaches 0 dBTP is refused; lower the levels."""
+        run = self.skill.run_tool("loudness", [str(out_path), "--measure-only"], timeout)
+        st.seconds += run.seconds
+        st.tool_commands += run.commands
+        doc = run.data if isinstance(run.data, dict) else {}
+        tp = self._loudness_numbers(next((doc[k] for k in ("result", "measured") if isinstance(doc.get(k), dict)), doc)).get("true_peak_dbtp")
+        st.measurements["stem"]["true_peak_dbtp"] = tp
+        if tp is not None and (not math.isfinite(tp) or tp >= 0.0):
+            raise AudioError("VALIDATION_ERROR", f"STEM {st.node.node_id}: true peak {tp} dBTP reaches full scale; a clipped stem does not sum to the mix (lower the levels)",
+                             {"reason": "stem_clipped", "true_peak_dbtp": tp, "stem_id": st.node.parameters["stem_id"]})
+
+    def stems_summary(self, project: Any, out_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Summary of every STEMS operation (response key `stems`): per stem its role, members, sample count, outputs."""
+        by_node: Dict[str, List[Dict[str, Any]]] = {}
+        for r in out_results:
+            nid = (r.get("provenance") or {}).get("node_id")
+            if nid:
+                art = r.get("artifact") or {}
+                delivered = round(art["duration"] * art["sample_rate"]) if art.get("duration") and art.get("sample_rate") else None
+                by_node.setdefault(nid, []).append({"output_id": r["output_id"], "path": r["path"], "format": r.get("format"), "status": r["status"],
+                                                    "samples": delivered, "sample_rate": art.get("sample_rate")})
+        out = []
+        for op in project.operations:
+            if op.type != "STEMS":
+                continue
+            stems = []
+            for stem in op.parameters["stems"]:
+                nid = f"op:{op.op_id}.{stem['stem_id']}"
+                st = self._states.get(nid)
+                m = (st.measurements.get("stem") if st else None) or {}
+                stems.append({"stem_id": stem["stem_id"], "node_id": nid, "role": stem.get("role"), "inputs": [op.inputs[k] for k in stem["inputs"]],
+                              "gains_db": [op.parameters["levels"][k]["gain_db"] for k in stem["inputs"]], "status": st.status if st else "planned",
+                              "samples": m.get("samples"), "programme_samples": m.get("programme_samples"), "outputs": by_node.get(nid, [])})
+            out.append({"op_id": op.op_id, "stems": stems})
+        return out
 
     def _reusable(self, st: NodeState, out_path: Path, manifest: Path) -> bool:
         if not (out_path.is_file() and manifest.is_file()):
@@ -787,6 +884,13 @@ class Executor:
             export_state.segments = st.segments
             art = self._validate_artifact(target, export_state, expected_channels=st.artifact.channels if st.artifact else None, expect=out.expect, fmt=out.format)
             delivered = self._measure_delivered(st, out, target, timeout) if st.node.type == "LOUDNESS_VERSION" else None
+            if st.node.type == "STEM":
+                stem = st.measurements.get("stem") or {}
+                samples = round(art.duration * art.sample_rate)
+                if art.sample_rate != stem.get("sample_rate") or samples != stem.get("programme_samples"):
+                    raise AudioError("VALIDATION_ERROR", f"output {out.output_id!r}: the delivered stem has {samples} samples at {art.sample_rate} Hz, "
+                                     f"the programme {stem.get('programme_samples')} at {stem.get('sample_rate')} Hz",
+                                     {"reason": "stem_length_mismatch", "samples": samples, "programme_samples": stem.get("programme_samples")})
         except AudioError:
             self._remove_partial(target)
             raise

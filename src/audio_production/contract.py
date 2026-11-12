@@ -10,7 +10,7 @@ from .adapter import FLAGS_USED, KNOWN_CONTRACT_VERSIONS, OPTIONAL_FLAGS_USED, S
 from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
 from .executor import CLEANUP_POLICIES, DURATION_TOLERANCE, TOOL_FOR, WORK_DIR_NAME
 from .fillers import LEXICON_PRESETS, MAX_RUN_TOKENS, RUN_MAX_GAP
-from .model import (CHANNEL_LAYOUTS, DUCK_FIELDS, LOUDNESS_PROFILES, LOUDNESS_VERSION_FIELDS, MAX_LOUDNESS_VERSIONS, DYNAMICS_STAGES, FORBIDDEN_KEYS, MAX_LEXICON_WORDS, MAX_WORDS, TRANSCRIPT_SCHEMA, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
+from .model import (CHANNEL_LAYOUTS, DUCK_FIELDS, LOUDNESS_PROFILES, LOUDNESS_VERSION_FIELDS, MAX_LOUDNESS_VERSIONS, MAX_STEMS, STEM_ROLES, DYNAMICS_STAGES, FORBIDDEN_KEYS, MAX_LEXICON_WORDS, MAX_WORDS, TRANSCRIPT_SCHEMA, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
                     OUTPUT_FORMATS, REF_RE, REQUEST_SCHEMA_ID, SAMPLE_RATES, UNSUPPORTED_OPERATIONS)
 
 CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
@@ -19,7 +19,7 @@ CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
 # `CapabilityContract.provides`), matching the ids already assigned to this Skill's
 # operations in that project's own docs/CAPABILITY_MATRIX.md. Every operation type maps
 # 1:1 to its own id (FADE_IN / FADE_OUT are `audio.fade_in` / `audio.fade_out`: a
-# registry keys capabilities by id, so one id per entry). All seventeen always write a
+# registry keys capabilities by id, so one id per entry). All eighteen always write a
 # validated audio artifact through the single `{SKILL_ID}/run` tool, so none is excluded
 # the way `thumbnail/validate` is elsewhere.
 CAPABILITY_IDS: Dict[str, str] = {
@@ -27,7 +27,7 @@ CAPABILITY_IDS: Dict[str, str] = {
     "FADE_IN": "audio.fade_in", "FADE_OUT": "audio.fade_out", "NORMALIZE": "audio.normalize", "MIX": "audio.mix",
     "MONO": "audio.mono", "STEREO": "audio.stereo", "DOWNMIX": "audio.downmix", "NOISE_REDUCTION": "audio.noise_reduction",
     "DYNAMICS": "audio.dynamics", "CONCAT": "audio.concat", "VOICE_CLEANUP": "audio.voice_cleanup",
-    "FILLER_REMOVE": "audio.filler_remove", "LOUDNESS_SET": "audio.loudness_set",
+    "FILLER_REMOVE": "audio.filler_remove", "LOUDNESS_SET": "audio.loudness_set", "STEMS": "audio.stems",
 }
 
 
@@ -79,6 +79,12 @@ def _param_schema(ps: Dict[str, Any]) -> Dict[str, Any]:
         out["min_items"], out["max_items"] = 1, MAX_LOUDNESS_VERSIONS
         out["items"] = {"type": "object", "properties": {k: {kk: vv for kk, vv in v.items()} for k, v in LOUDNESS_VERSION_FIELDS.items()},
                         "required": ["version_id"], "one_of": [["profile"], ["target_lufs", "true_peak_db"]], "additionalProperties": False}
+    if ps["type"] == "stems":
+        out["type"] = "array"
+        out["min_items"], out["max_items"] = 1, MAX_STEMS
+        out["items"] = {"type": "object", "properties": {"stem_id": {"type": "string"}, "inputs": {"type": "array", "items": {"type": "integer", "min": 0}},
+                                                         "role": {"type": "string", "enum": list(STEM_ROLES)}},
+                        "required": ["stem_id", "inputs"], "additionalProperties": False, "rule": "every input index in exactly one stem"}
     if ps["type"] == "lexicon":
         out["type"] = "object"
         out["properties"] = {"presets": {"type": "array", "items": {"type": "string", "enum": sorted(LEXICON_PRESETS)}},
@@ -95,7 +101,7 @@ def operation_specs() -> List[Dict[str, Any]]:
         out.append({"type": typ, "description": spec["description"], "inputs": {"min": spec["inputs"][0], "max": spec["inputs"][1]},
                     "parameters": {k: _param_schema(v) for k, v in spec["parameters"].items()},
                     "tool": f"ffmpeg-skill/{tool}", "required_capabilities": ["ffmpeg-skill", "ffmpeg", "ffprobe", "encoder:pcm_s16le", *extra],
-                    "keeps_timeline": typ not in ("TRIM", "CUT", "SILENCE_REMOVE", "FILLER_REMOVE", "MIX", "CONCAT"), "deterministic": "content_equivalent"})
+                    "keeps_timeline": typ not in ("TRIM", "CUT", "SILENCE_REMOVE", "FILLER_REMOVE", "MIX", "STEMS", "CONCAT"), "deterministic": "content_equivalent"})
     return out
 
 
@@ -111,7 +117,7 @@ def skill_contract() -> Dict[str, Any]:
         "schema": CONTRACT_SCHEMA_ID, "skill_id": SKILL_ID, "id": SKILL_ID, "name": PACKAGE_NAME, "package": PACKAGE_NAME, "version": VERSION,
         "kind": "execution", "role": "audio production (processing); not measurement, not decision",
         "description": "Deterministic audio production execution: gain, sample-accurate trim / cut, silence removal (explicit ranges), filler removal (caller-supplied word timings), fades, EBU R128 loudness "
-                       "normalisation, several delivery loudness versions in one run, mix (with sidechain ducking), concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), speech clean-up presets, format conversion and "
+                       "normalisation, several delivery loudness versions in one run, stems (dialogue / music / effects files that sum to the mix), mix (with sidechain ducking), concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), speech clean-up presets, format conversion and "
                        "audio extraction from video containers; typed operation graph in, validated artifacts with provenance out. Not an AI agent.",
         "repository": "https://github.com/kajisho5/audio-production-skill",
         "not_provided": ["AI reasoning", "decisions", "production plans", "loudness or silence measurement for decisions (media-analysis-skill)", "speech recognition",

@@ -56,7 +56,7 @@ def test_optional_flags_are_detected_not_assumed(tmp_path):
     assert old.supported and new.supported
     assert old.optional_flags() == {tool: {f: False for f in flags} for tool, flags in OPTIONAL_FLAGS_USED.items()}
     assert new.optional_flags() == {tool: {f: True for f in flags} for tool, flags in OPTIONAL_FLAGS_USED.items()}
-    assert set(OPTIONAL_FLAGS_USED["audio"]) == {"overwrite", "duck", "duck_amount", "duck_threshold", "duck_attack", "duck_release"}
+    assert set(OPTIONAL_FLAGS_USED["audio"]) == {"overwrite", "duck", "duck_amount", "duck_threshold", "duck_attack", "duck_release", "replace"}
     assert OPTIONAL_FLAGS_USED["cut"] == ("declick_ms",) and OPTIONAL_FLAGS_USED["loudness"] == ("measure_only",)
     assert not old.takes_flag("audio", "overwrite") and new.takes_flag("audio", "overwrite")
 

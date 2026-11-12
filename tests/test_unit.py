@@ -515,3 +515,25 @@ def test_loudness_set_graph_and_references():
     err(lambda: OperationGraph(parse_request(request_doc(ops, outputs=outs[1:])).project), "DEPENDENCY_ERROR")
     err(parse_request, "DEPENDENCY_ERROR", request_doc(ops + [{"op_id": "d.web", "type": "GAIN", "inputs": ["track:t1"], "parameters": {"gain_db": 1}}], outputs=outs))
     err(parse_request, "MISSING_INPUT", request_doc(ops, outputs=[{"output_id": "w", "operation": "op:d.nope", "path": "o/w.wav", "format": "wav"}]))
+
+
+def test_stems_parameters_and_graph():
+    v = validate_parameters
+    p = v("STEMS", {"stems": [{"stem_id": "dx", "inputs": [0], "role": "dialogue"}, {"stem_id": "me", "inputs": [2, 1]}]}, 3, "p")
+    assert p["stems"] == [{"stem_id": "dx", "inputs": [0], "role": "dialogue"}, {"stem_id": "me", "inputs": [1, 2]}] and len(p["levels"]) == 3
+    e = err(v, "INVALID_REQUEST", "STEMS", {"stems": [{"stem_id": "dx", "inputs": [0]}]}, 3, "p")
+    assert e.details["reason"] == "input_in_no_stem" and e.details["inputs"] == [1, 2]
+    e = err(v, "INVALID_REQUEST", "STEMS", {"stems": [{"stem_id": "a", "inputs": [0, 1]}, {"stem_id": "b", "inputs": [1]}]}, 2, "p")
+    assert e.details["reason"] == "input_in_two_stems"
+    err(v, "INVALID_REQUEST", "STEMS", {"stems": [{"stem_id": "a", "inputs": [0, 2]}]}, 2, "p")
+    err(v, "INVALID_REQUEST", "STEMS", {"stems": [{"stem_id": "a", "inputs": [0, 1], "role": "choir"}]}, 2, "p")
+    err(v, "DEPENDENCY_ERROR", "STEMS", {"stems": [{"stem_id": "a", "inputs": [0]}, {"stem_id": "a", "inputs": [1]}]}, 2, "p")
+    err(v, "INVALID_REQUEST", "STEMS", {"stems": [{"stem_id": "a", "inputs": [0, 1]}], "levels": [{"gain_db": 0}, {"mute": True}]}, 2, "p")
+    err(v, "INVALID_REQUEST", "STEMS", {"stems": [{"stem_id": "a", "inputs": [0, 1]}], "duck": {"input": 1, "amount_db": 6}}, 2, "p")
+    tracks = [{"track_id": "t1", "source_id": "a"}, {"track_id": "t2", "source_id": "a"}]
+    ops = [{"op_id": "s", "type": "STEMS", "inputs": ["track:t1", "track:t2"], "parameters": {"levels": [{"gain_db": -1}, {"gain_db": -6}],
+                                                                                            "stems": [{"stem_id": "d", "inputs": [0]}, {"stem_id": "m", "inputs": [1], "role": "music"}]}}]
+    outs = [{"output_id": x, "operation": f"op:s.{x}", "path": f"o/{x}.wav", "format": "wav"} for x in ("d", "m")]
+    g = OperationGraph(parse_request(request_doc(ops, outputs=outs, tracks=tracks)).project)
+    assert "op:s" not in g.nodes and g.nodes["op:s.m"].type == "STEM" and g.nodes["op:s.m"].inputs == ["track:t1", "track:t2"]
+    assert g.nodes["op:s.m"].parameters == {"stems_op": "s", "stem_id": "m", "members": [1], "gains_db": [-6.0], "role": "music"}

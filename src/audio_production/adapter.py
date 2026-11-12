@@ -74,10 +74,12 @@ FLAGS_USED: Dict[str, Tuple[str, ...]] = {
 #   audio.duck_threshold, audio.duck_attack, audio.duck_release
 #                          MIX.duck.threshold_db / attack_ms / release_ms (ffmpeg-skill >= 2.x; 0.12.2 has a fixed
 #                          threshold / attack / release); used only when the request sets them, refused if undeclared.
+#   audio.replace          STEMS: a stem without input 0 replaces input 0's audio with its first member, padded /
+#                          trimmed to input 0's duration (every release this skill runs declares it; refused if not).
 #   cut.declick_ms         FILLER_REMOVE.declick_ms (fade at each --segments join); a value above 0 is refused at
 #                          planning when undeclared, 0 or omitted needs nothing (ADR-18).
 OPTIONAL_FLAGS_USED: Dict[str, Tuple[str, ...]] = {
-    "audio": ("overwrite", "duck", "duck_amount", "duck_threshold", "duck_attack", "duck_release"),
+    "audio": ("overwrite", "duck", "duck_amount", "duck_threshold", "duck_attack", "duck_release", "replace"),
     "cut": ("declick_ms",),
     "loudness": ("measure_only",),
 }
