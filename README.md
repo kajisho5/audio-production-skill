@@ -183,7 +183,10 @@ used. It is a declaration for the registry; compatibility is still decided flag 
 - **Fillers**: `FILLER_REMOVE` cuts at word timings the caller supplies (`words`, or a `transcription-skill/transcript/0.1`
   document as `transcript`) wherever a word matches the caller-chosen `lexicon` (`presets` `ja` / `en`, extra `words`,
   `keep` exceptions; required, no default). It never transcribes; a transcript segment without word timestamps is
-  refused (`INVALID_REQUEST`, `reason: word_timestamps_missing`). See ADR-18.
+  refused (`INVALID_REQUEST`, `reason: word_timestamps_missing`). See ADR-18. Words that are also ordinary words are
+  in no preset; the contract publishes them as opt-in lists (`filler_lexicons.opt_in`, today only `ja-ambiguous`:
+  あの / その / まあ / なんか) that a caller copies into `words` on purpose. Each removal of such a word is a warning and
+  is listed in `measurements.filler_remove.ambiguous`. See ADR-25.
 
 ### Output schema (`audio-production/response@1`)
 

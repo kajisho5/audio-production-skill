@@ -403,6 +403,19 @@ def test_filler_normalisation_and_presets():
     assert "あの" in lex and "えっと" not in lex and "えー" in lex and "um" not in lex
 
 
+def test_filler_opt_in_lists():
+    """ja-ambiguous (ADR-25): the four words the ja preset leaves out, opt-in only. Never in a preset, so no preset
+    selection (and no default) cuts them; matched as whole tokens, so a longer token that contains one is kept."""
+    from audio_production.fillers import LEXICON_PRESETS, OPT_IN_LISTS, effective_lexicon, match_fillers, normalise, opt_in_hits
+    assert OPT_IN_LISTS == {"ja-ambiguous": ("あの", "その", "まあ", "なんか")}
+    every_preset = effective_lexicon(sorted(LEXICON_PRESETS), [], [])
+    assert not every_preset & {normalise(w) for ws in OPT_IN_LISTS.values() for w in ws}
+    assert opt_in_hits("あの、") == opt_in_hits("なんか…") == ["ja-ambiguous"] and opt_in_hits("あのー") == opt_in_hits("あの人") == []
+    lex = effective_lexicon(["ja"], list(OPT_IN_LISTS["ja-ambiguous"]), [])
+    words = [_w(0.0, 0.3, "あの、"), _w(0.5, 0.7, "あの"), _w(0.7, 0.9, "人"), _w(1.0, 1.4, "あの人"), _w(1.5, 1.9, "まあまあ")]
+    assert match_fillers(words, lex) == [(0, 1), (1, 2)]                  # own tokens are cut whatever they mean; longer tokens stay
+
+
 def test_filler_matching_runs_pad_and_merge():
     from audio_production.fillers import effective_lexicon, match_fillers, removal_ranges
     lex = effective_lexicon(["ja", "en"], [], [])

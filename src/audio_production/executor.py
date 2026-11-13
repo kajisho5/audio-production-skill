@@ -22,7 +22,7 @@ from . import RESPONSE_SCHEMA_VERSION, SKILL_ID, VERSION
 from .adapter import FfmpegSkill, ToolRun, fmt_db, fmt_seconds
 from .canonical import sha256_file, stable_hash
 from .errors import AudioError
-from .fillers import effective_lexicon, match_fillers, removal_ranges
+from .fillers import effective_lexicon, match_fillers, opt_in_hits, removal_ranges
 from .graph import Node, OperationGraph
 from .model import CHANNEL_LAYOUTS, INTERMEDIATE_FORMAT, OUTPUT_FORMATS, AudioRequest, TimeRange, parse_request
 from .security import PathPolicy
@@ -389,9 +389,15 @@ class Executor:
         declick = p.get("declick_ms")
         if declick is not None and declick > 0:
             self._require_flags("cut", ("declick_ms",), where, "FILLER_REMOVE declick_ms")
+        matched = [{"text": " ".join(words[j]["text"] for j in range(a, b)), "start": words[a]["start"], "end": words[b - 1]["end"],
+                    "lists": opt_in_hits("".join(str(words[j]["text"]) for j in range(a, b)))} for a, b in runs]
+        ambiguous = [{"text": m["text"], "start": m["start"], "end": m["end"], "list": m["lists"][0]} for m in matched if m["lists"]]
+        for m in ambiguous:
+            self.warnings.append(f"{where}: removed {m['text']!r} at {m['start']}s; it is also an ordinary word (opt-in list {m['list']}), "
+                                 "check that it was a filler here")
         st.measurements["effective_ranges"] = [r.to_dict() for r in ranges]
         st.measurements["filler_remove"] = {
-            "matched": [{"text": " ".join(words[j]["text"] for j in range(a, b)), "start": words[a]["start"], "end": words[b - 1]["end"]} for a, b in runs],
+            "matched": [{k: v for k, v in m.items() if k != "lists"} for m in matched], "ambiguous": ambiguous,
             "matched_count": len(runs), "ranges_count": len(ranges), "removed_seconds": round(sum(r.duration for r in ranges), 6),
             "words_count": len(words), "lexicon": sorted(effective_lexicon(lex["presets"], lex["words"], lex["keep"])),
             "declick_ms": declick if declick is not None and self.skill.takes_flag("cut", "declick_ms") else None}

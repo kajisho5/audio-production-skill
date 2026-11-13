@@ -15,7 +15,8 @@ fixtures and for ffmpeg-skill) and an ffmpeg-skill checkout (`AUDIO_PRODUCTION_F
 Fixtures (`tests/fixtures/generate.py`) are synthesised with ffmpeg at test time: 6 s mono PCM tone (−23 LUFS),
 4 s stereo AAC, gated tone (silence 0–2 s and 5–6 s), 5.1 PCM, digital silence, a video with audio, a video without
 audio, a text file, a tone with two louder "filler" stretches (1.0–1.5 s, 3.0–3.4 s), a loud key tone (2–5 s) and a
-steady 440 Hz bed. Expected values in the tests follow from the construction.
+steady 440 Hz bed, and `ambiguous.wav`: 17 half-second "words", loud exactly where a token equal to an entry of the
+opt-in list `ja-ambiguous` is (each of its four words used as a filler and as a content word, ADR-25). Expected values in the tests follow from the construction.
 
 Static checks used in development: `python -m pyflakes src tests`, `python -m mypy src/audio_production`,
 `python -m compileall src tests`.

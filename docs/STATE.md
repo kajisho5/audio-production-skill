@@ -113,6 +113,13 @@ reported `unknown` by doctor; no eviction.
   levels refused at planning); `doctor` reports `checks.ffmpeg_skill.voice_levels`; capability id
   `audio.voice_cleanup`. Breaking for pinning agents (an operation added; `tools`, `provides`, `ffmpeg_skill` blocks
   changed); `tests/contract/contract.json` regenerated, version left to the release workflow.
+- 2026-11-13: FILLER_REMOVE opt-in list `ja-ambiguous` (ECOSYSTEM_ROADMAP step 13, ADR-25). The four words that
+  ffmpeg-skill `silence --filler`'s Japanese list has and the `ja` preset leaves out (あの / その / まあ / なんか) are
+  published as `filler_lexicons.opt_in`, outside every preset; a caller copies the list into `lexicon.words`. Each
+  removal of one of them is a warning and is listed in `measurements.filler_remove.ambiguous`. Fixture
+  `ambiguous.wav`: fillers and content words on their own token are cut alike, content inside a longer token
+  (あの人 / その日 / まあまあ) is kept. Presets unchanged (`en` now listed first); contract change additive only
+  (`filler_lexicons` is outside the pinned blocks).
 - 2026-10-31: NOISE_REDUCTION `strength_db` minimum raised from 10 to 20 (ADR-17; closes the PLANNED item). ffmpeg-skill
   maps it to afftdn `nf=-<strength>`, valid only in [−80, −20], so 10 ≤ strength_db < 20 validated and then failed at run
   time with `TOOL_ERROR`; it is now refused at validation / planning (dry run included) with `INVALID_REQUEST` naming
