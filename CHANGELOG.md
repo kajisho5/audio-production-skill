@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.1 - 2026-11-13
+
+- docs: write down the loudness owner and engine (roadmap step 12, partly) (#36) (b9715ef)
+
 ## v1.3.0 - 2026-11-13
 
 - feat: FILLER_REMOVE opt-in list ja-ambiguous (roadmap step 13) (#35) (b0b6df0)
