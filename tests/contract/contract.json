@@ -1263,6 +1263,18 @@
   ],
   "filler_lexicons": {
     "presets": {
+      "en": [
+        "um",
+        "umm",
+        "uh",
+        "uhh",
+        "uhm",
+        "erm",
+        "er",
+        "hmm",
+        "mm",
+        "ah"
+      ],
       "ja": [
         "\u3048\u30fc",
         "\u3048\u30fc\u3068",
@@ -1275,22 +1287,19 @@
         "\u3046\u30fc\u3093",
         "\u3093\u30fc",
         "\u3048\u3048\u3068"
-      ],
-      "en": [
-        "um",
-        "umm",
-        "uh",
-        "uhh",
-        "uhm",
-        "erm",
-        "er",
-        "hmm",
-        "mm",
-        "ah"
       ]
     },
     "default": "none: FILLER_REMOVE.lexicon is required",
-    "matching": "exact on normalised text (NFKC, case-folded, punctuation and whitespace dropped, long-vowel marks unified); runs of up to 3 tokens at most 0.05s apart count as one word; the longest run wins"
+    "matching": "exact on normalised text (NFKC, case-folded, punctuation and whitespace dropped, long-vowel marks unified); runs of up to 3 tokens at most 0.05s apart count as one word; the longest run wins",
+    "opt_in": {
+      "ja-ambiguous": [
+        "\u3042\u306e",
+        "\u305d\u306e",
+        "\u307e\u3042",
+        "\u306a\u3093\u304b"
+      ]
+    },
+    "opt_in_use": "not presets and never a default: words that are also ordinary words. A caller who wants one list cut copies it into FILLER_REMOVE.lexicon.words. Every token (or run of touching tokens) equal to one of them is cut, whatever it means in the sentence; a longer token that contains one (\"\u3042\u306e\u4eba\") is kept. Each such removal is a warning and is listed in measurements.filler_remove.ambiguous"
   },
   "unsupported_operations": [
     {

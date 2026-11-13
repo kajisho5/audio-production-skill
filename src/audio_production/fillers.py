@@ -21,10 +21,21 @@ from typing import Any, Dict, FrozenSet, Iterable, List, Sequence, Tuple
 
 # Named lexicons a caller may select (`lexicon.presets`). Only hesitation sounds: words that are also ordinary words
 # in running speech ("あの" as in "あの人", "その", "まあ", "なんか", "like", "you know") are left out on purpose -- cutting
-# them cuts real sentences. A caller who wants them adds them through `lexicon.words`.
+# them cuts real sentences. A caller who wants them adds them through `lexicon.words`. Neither preset is a default:
+# FILLER_REMOVE has no lexicon unless the caller names one (ADR-18).
 LEXICON_PRESETS: Dict[str, Tuple[str, ...]] = {
-    "ja": ("えー", "えーと", "えーっと", "えっと", "えと", "あー", "あのー", "そのー", "うーん", "んー", "ええと"),
     "en": ("um", "umm", "uh", "uhh", "uhm", "erm", "er", "hmm", "mm", "ah"),
+    "ja": ("えー", "えーと", "えーっと", "えっと", "えと", "あー", "あのー", "そのー", "うーん", "んー", "ええと"),
+}
+
+# Opt-in lists (ADR-25): words a caller may add on purpose, published in the contract (`filler_lexicons.opt_in`) and
+# never part of a preset. They are not selectable by preset name: the caller copies one into `lexicon.words`, so a
+# request says in its own text which ordinary words it lets the run cut. Every match from one of these lists is
+# reported in the run's warnings and in `measurements.filler_remove.ambiguous`.
+#   ja-ambiguous: the four words that ffmpeg-skill `silence --filler`'s built-in Japanese list has and the `ja` preset
+#                 leaves out because they are also content words (ECOSYSTEM_ROADMAP step 13; the comment above).
+OPT_IN_LISTS: Dict[str, Tuple[str, ...]] = {
+    "ja-ambiguous": ("あの", "その", "まあ", "なんか"),
 }
 MAX_RUN_TOKENS = 3
 RUN_MAX_GAP = 0.05
@@ -104,3 +115,10 @@ def removal_ranges(words: Sequence[Dict[str, Any]], runs: Sequence[Tuple[int, in
                 continue
         merged.append((s, e, a, b))
     return [(round(s, 6), round(e, 6)) for s, e, _, _ in merged]
+
+
+def opt_in_hits(text: str) -> List[str]:
+    """Names of the opt-in lists whose words include `text` (normalised): a matched filler that is also an ordinary
+    word, which the run reports instead of passing over in silence."""
+    n = normalise(text)
+    return [name for name, ws in OPT_IN_LISTS.items() if n and n in {normalise(w) for w in ws}]

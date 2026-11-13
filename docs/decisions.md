@@ -285,3 +285,28 @@
     agent must re-pin. Measured (FFmpeg 6.1, `keyed.wav` 6 s dialogue at −2 dB, `longbed.wav` 8 s music at −6 dB,
     `sfx.wav` 4 s effects at −3 dB): three stems of 288000 samples each, like the mix, whose sum differs from the
     MIX output by at most 1 LSB of 16-bit PCM (−90.3 dBFS), against a limit of −60 dB.
+
+- **ADR-25 Words that are also ordinary words stay out of the filler presets; they are an opt-in list (roadmap step 13).**
+  - *The difference.* ffmpeg-skill `silence --filler`'s built-in Japanese list has あの / その / まあ / なんか, which
+    the `ja` preset leaves out because each is also a content word (ADR-18, `fillers.py`). That tool marks the same
+    four as ambiguous and warns when it removes one. The `ja` preset has あー / うーん / んー, which that list lacks.
+    The agent does not call `silence --filler`, so the two lists never meet in one run.
+  - *Choice.* Keep both lists as they are and say why; do not ask ffmpeg-skill to change its list (it is treated
+    as complete, and its tool also decides silences on its own, which this skill does not use). The four words are
+    added here as an opt-in list, `ja-ambiguous` (`fillers.OPT_IN_LISTS`). It is not a preset and has no default.
+    The contract publishes it in `filler_lexicons.opt_in` and a caller copies it into `lexicon.words`, so the
+    request text itself names the ordinary words it lets the run cut.
+  - *Why not a preset name.* A new `lexicon.presets` value would change FILLER_REMOVE's pinned `parameters` (the
+    preset enum), and video-production-agent would have to re-pin. `filler_lexicons` sits outside the pinned blocks,
+    so this change is additive. A later preset can still be added if a consumer asks for one.
+  - *Reporting.* Every matched filler whose text is in an opt-in list, however the caller chose it, is a warning
+    (`removed 'あの、' at 0.0s; it is also an ordinary word`) and an entry of `measurements.filler_remove.ambiguous`
+    (`text`, `start`, `end`, `list`).
+  - *What is cut.* Matching is on tokens, not meaning. A token, or a run of touching tokens, equal to one of the
+    words is cut wherever it occurs: as a filler, and as a content word that arrives as its own token
+    (`あの` + `人`). A content word inside a longer token (`あの人`, `その日`, `まあまあ`) is kept. The fixture
+    `ambiguous.wav` has each word used both ways. With the list, the nine tokens equal to one of the words go, and
+    192000 samples (4.0 s) remain at the quiet words' −20 dBFS, with nine warnings. With the `ja` preset alone,
+    nothing is cut.
+  - *Default.* No lexicon is a default; `en` is now listed first in `filler_lexicons.presets`. Japanese-specific
+    words are reachable only by naming them.

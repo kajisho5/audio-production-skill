@@ -9,7 +9,7 @@ from . import CONTRACT_SCHEMA_VERSION, DOCTOR_SCHEMA_VERSION, PACKAGE_NAME, REQU
 from .adapter import FLAGS_USED, KNOWN_CONTRACT_VERSIONS, OPTIONAL_FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
 from .executor import CLEANUP_POLICIES, DURATION_TOLERANCE, TOOL_FOR, WORK_DIR_NAME
-from .fillers import LEXICON_PRESETS, MAX_RUN_TOKENS, RUN_MAX_GAP
+from .fillers import LEXICON_PRESETS, MAX_RUN_TOKENS, OPT_IN_LISTS, RUN_MAX_GAP
 from .model import (CHANNEL_LAYOUTS, DUCK_FIELDS, LOUDNESS_PROFILES, LOUDNESS_VERSION_FIELDS, MAX_LOUDNESS_VERSIONS, MAX_STEMS, STEM_ROLES, DYNAMICS_STAGES, FORBIDDEN_KEYS, MAX_LEXICON_WORDS, MAX_WORDS, TRANSCRIPT_SCHEMA, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
                     OUTPUT_FORMATS, REF_RE, REQUEST_SCHEMA_ID, SAMPLE_RATES, UNSUPPORTED_OPERATIONS)
 
@@ -128,7 +128,12 @@ def skill_contract() -> Dict[str, Any]:
         "operations": operation_specs(),
         "filler_lexicons": {"presets": {k: list(v) for k, v in LEXICON_PRESETS.items()}, "default": "none: FILLER_REMOVE.lexicon is required",
                             "matching": f"exact on normalised text (NFKC, case-folded, punctuation and whitespace dropped, long-vowel marks unified); runs of up to "
-                                        f"{MAX_RUN_TOKENS} tokens at most {RUN_MAX_GAP}s apart count as one word; the longest run wins"},
+                                        f"{MAX_RUN_TOKENS} tokens at most {RUN_MAX_GAP}s apart count as one word; the longest run wins",
+                            "opt_in": {k: list(v) for k, v in OPT_IN_LISTS.items()},
+                            "opt_in_use": "not presets and never a default: words that are also ordinary words. A caller who wants one list cut copies it into "
+                                          "FILLER_REMOVE.lexicon.words. Every token (or run of touching tokens) equal to one of them is cut, whatever it means "
+                                          "in the sentence; a longer token that contains one (\"あの人\") is kept. Each such removal is a warning and is listed in "
+                                          "measurements.filler_remove.ambiguous"},
         "unsupported_operations": [{"type": t, "status": "not_implemented", "reason": r} for t, r in UNSUPPORTED_OPERATIONS.items()],
         "output_formats": {f: {"extension": s["extension"], "codec": s["codec"], "required_capability": s["capability"], "lossless": s["lossless"]} for f, s in OUTPUT_FORMATS.items()},
         "intermediate_format": {"format": INTERMEDIATE_FORMAT, "codec": OUTPUT_FORMATS[INTERMEDIATE_FORMAT]["codec"], "work_dir": f"<workspace>/{WORK_DIR_NAME}/<project_id>/"},

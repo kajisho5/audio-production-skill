@@ -520,6 +520,44 @@ def test_filler_remove_sample_accurate(workspace, skill_dir):
     assert d["error"]["code"] == "INVALID_TIME_RANGE"
 
 
+# ---- the opt-in list ja-ambiguous (ADR-25, ECOSYSTEM_ROADMAP step 13): each of its four words as a filler and as a
+# content word. Half-second words; "cut" marks what the run removes. The run matches tokens, not meanings: a content
+# use that arrives as its own token is cut like a filler, one inside a longer token is kept.
+AMBIGUOUS_WORDS = [   # (text, use, cut)
+    ("あの、", "filler", True), ("今日は", "other", False), ("その、", "filler", True), ("まあ、", "filler", True), ("なんか、", "filler", True),
+    ("話します", "other", False), ("あの", "content, own token", True), ("人", "other", False), ("その", "content, own token", True), ("日", "other", False),
+    ("まあ", "content, own token", True), ("まあ", "content, own token", True), ("なんか", "content, own token", True), ("ある", "other", False),
+    ("あの人", "content, inside a longer token", False), ("その日", "content, inside a longer token", False), ("まあまあ", "content, inside a longer token", False)]
+
+
+def test_filler_remove_opt_in_ambiguous_list(workspace, skill_dir):
+    """ambiguous.wav is loud exactly where a token equal to あの / その / まあ / なんか is (fillers and content words on
+    their own token alike), quiet elsewhere. With ja-ambiguous copied into lexicon.words, those nine tokens go: 4.0 s
+    (192000 samples) remain, peaking at the quiet words' -20 dBFS. Every removal is a warning and is listed in
+    measurements.filler_remove.ambiguous. Without the list, the ja preset alone cuts none of them."""
+    from audio_production.contract import skill_contract
+    words = [{"start": 0.5 * i, "end": 0.5 * i + 0.5, "text": t} for i, (t, _, _) in enumerate(AMBIGUOUS_WORDS)]
+    opt_in = skill_contract()["filler_lexicons"]["opt_in"]["ja-ambiguous"]
+    assert sorted(opt_in) == sorted(["あの", "その", "まあ", "なんか"])
+    src = [{"source_id": "a", "path": "ambiguous.wav"}]
+    code, d = run(request_doc([op("f", "FILLER_REMOVE", ["track:t1"], words=words, lexicon={"presets": ["ja"], "words": opt_in}, declick_ms=0)], sources=src))
+    assert code == 0 and d["ok"], d.get("error")
+    out = workspace / "out" / "main.wav"
+    assert samples(out) == 192000
+    assert max_volume_dbfs(out) < -19.0                                   # every loud (expected-cut) word is gone
+    m = results(d)["op:f"]["measurements"]["filler_remove"]
+    cut = [(0.5 * i, t) for i, (t, _, c) in enumerate(AMBIGUOUS_WORDS) if c]
+    assert [(x["start"], x["text"]) for x in m["matched"]] == cut
+    assert [(x["start"], x["text"], x["list"]) for x in m["ambiguous"]] == [(s, t, "ja-ambiguous") for s, t in cut]
+    assert len([w for w in d["warnings"] if "ordinary word" in w]) == len(cut) == 9
+    kept = {t for t, _, c in AMBIGUOUS_WORDS if not c}
+    assert not kept & {x["text"] for x in m["matched"]}                   # あの人 / その日 / まあまあ and the other words stay
+    # the ja preset alone: none of the four is a preset filler, nothing is cut, no warning
+    code, d = run(request_doc([op("f", "FILLER_REMOVE", ["track:t1"], words=words, lexicon={"presets": ["ja"]})], sources=src))
+    assert d["ok"] and samples(workspace / "out" / "main.wav") == 408000, d.get("error")
+    assert results(d)["op:f"]["measurements"]["filler_remove"]["ambiguous"] == [] and not [w for w in d["warnings"] if "ordinary word" in w]
+
+
 def test_filler_remove_declick_is_detected(workspace, skill_dir):
     """declick_ms > 0 runs where the located cut declares --declick-ms (fades, same sample count) and is refused at
     planning where it does not (ffmpeg-skill 0.12.2), never silently dropped."""
