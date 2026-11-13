@@ -310,3 +310,33 @@
     nothing is cut.
   - *Default.* No lexicon is a default; `en` is now listed first in `filler_lexicons.presets`. Japanese-specific
     words are reachable only by naming them.
+
+- **ADR-26 Every loudness measurement reports the mode loudnorm ran in (`loudnorm_mode`).**
+  - *Why.* loudnorm runs its second pass in linear mode (one gain) only while the input's range is within the LRA
+    target and a linear gain keeps the true peak under the ceiling. Otherwise it falls back to dynamic mode, which
+    compresses the range. A wide-range input therefore comes back compressed, not only louder or quieter.
+    `loudness_sets` gave no sign of this. ffmpeg-skill/loudness reports it as `result.loudnorm_mode`.
+  - *Shape.* `measurements.loudness.loudnorm_mode` on every NORMALIZE and LOUDNESS_SET version, and
+    `loudness_sets[].versions[].loudnorm_mode`. The name and values (`linear`, `dynamic`) are the same as in
+    ffmpeg-skill, so a consumer can read either. The value is `null` in a plan and when the located ffmpeg-skill does
+    not report it (releases before 3.6.7). Any other value is also read as `null`.
+  - *Source.* The value comes from ffmpeg-skill's own response (`executor.LOUDNORM_MODES`). This skill runs no ffmpeg
+    and parses no filter output (ADR-1), so it cannot read loudnorm's `normalization_type` itself. ffmpeg-skill
+    derives the mode by loudnorm's own rule, and its tests check that against `normalization_type`. This skill
+    infers no mode from the measured numbers: on an older ffmpeg-skill the field is `null`, never a guess.
+  - *Verification.* `test_loudness_set_reports_the_loudnorm_mode_of_every_version` runs `wide.wav`. That fixture
+    is a 24 s tone alternating every 4 s between two levels 18 dB apart (LRA 18.0 LU). The test runs it through two
+    versions and compares each reported mode with the `normalization_type` that ffmpeg's loudnorm prints for the
+    same second pass (pass 1, then `linear=true:print_format=json`, run by the test). Measured on FFmpeg 6.1 with
+    ffmpeg-skill 3.8.7, at −23 LUFS / −1 dBTP:
+
+    | LRA target | mode | result |
+    |---|---|---|
+    | 11 LU (ffmpeg-skill's default) | `dynamic` | −22.68 LUFS, −17.31 dBTP, LRA 15.0 LU |
+    | 20 LU | `linear` | −22.96 LUFS, −19.72 dBTP, LRA 18.0 LU |
+
+    The steady-tone fixtures (`programme.wav`, LRA 0) also come back `dynamic`: loudnorm treats a measured range of
+    0 as unusable for linear mode.
+  - *Contract.* Additive: a new key, `loudness.loudnorm_mode`, outside the pinned blocks (`contract --check`:
+    `additive`), and new response keys. No request field changed and no verification rule changed. A dynamic-mode
+    version is still delivered when it measures within `tolerance_lufs` and at or under its ceiling.

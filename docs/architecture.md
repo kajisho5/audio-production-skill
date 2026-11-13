@@ -75,7 +75,7 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
    the true-peak ceiling (ADR-23).
 6. Export every output with `ffmpeg-skill/audio` to a staging file next to its target (`.<name>.staged<ext>`) in the
    requested format and validate it against `expect`; the targets are replaced only once every output passed. An output
-   of a LOUDNESS_SET version is measured again (`loudness --measure-only`) and summarised in `loudness_sets`.
+   of a LOUDNESS_SET version is measured again (`loudness --measure-only`) and summarised in `loudness_sets`, with the `loudnorm_mode` ffmpeg-skill reported (ADR-26).
    A STEMS operation expands into one `STEM` node per stem (`op:<op_id>.<stem_id>`) that reads every input (input 0
    sets the programme's length); its sample count is checked against input 0's and summarised in `stems` (ADR-24).
 7. Return one response document: `ok`, `status`, `plan`, `results`, `outputs` (with provenance), `tool_runs`,
