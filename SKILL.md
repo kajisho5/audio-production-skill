@@ -17,4 +17,8 @@ Rules for a calling agent:
 4. Keep outputs inside the workspace, never at an input path; set `overwrite: true` deliberately.
 5. Read `results[].status`, `outputs[].provenance` and `error` from the JSON; the exit code is 0 only when `ok` is true.
 
+Loudness: this skill owns 音量・ラウドネス, and ffmpeg-skill is the engine: `NORMALIZE` and `LOUDNESS_SET` run through
+ffmpeg-skill `loudness`. video-production-agent's video path keeps calling `ffmpeg-skill/loudness` itself; that routing changes
+only after a measured comparison of `loudnorm` and `ebur128` (video-production-agent step 34).
+
 See README.md for the schemas, operation table, error codes and limitations.
