@@ -19,6 +19,7 @@ Rules for a calling agent:
 
 Loudness: this skill owns 音量・ラウドネス, and ffmpeg-skill is the engine: `NORMALIZE` and `LOUDNESS_SET` run through
 ffmpeg-skill `loudness`. video-production-agent's video path keeps calling `ffmpeg-skill/loudness` itself; that routing changes
-only after a measured comparison of `loudnorm` and `ebur128` (video-production-agent step 34).
+only after a measured comparison of `loudnorm` and `ebur128` (video-production-agent step 34). That comparison
+([ADR-116](https://github.com/kajisho5/video-production-agent/blob/main/docs/decisions.md)) found both paths write the same samples, so the routing stays as it is.
 
 See README.md for the schemas, operation table, error codes and limitations.
