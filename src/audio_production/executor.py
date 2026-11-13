@@ -42,6 +42,7 @@ PARTIAL_REMOVE_SETTLE = 10.0
 
 # tool selection per node type (ffmpeg-skill tool, extra capabilities beyond ffmpeg/ffprobe)
 LOUDNESS_NODE_TYPES = ("NORMALIZE", "LOUDNESS_VERSION")
+LOUDNORM_MODES = ("linear", "dynamic")     # ffmpeg-skill/loudness result.loudnorm_mode, read as reported (ADR-26)
 
 TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
     "SOURCE_TRACK": ("probe", []),
@@ -804,6 +805,17 @@ class Executor:
         return {"result": dict(measured), "measured_by": "ffmpeg-skill/loudness --measure-only (output re-measured: this release's NORMALIZE response has no result)"}
 
     @staticmethod
+    def _loudnorm_mode(result: Dict[str, Any]) -> Optional[str]:
+        """The mode loudnorm ran its second pass in, as ffmpeg-skill/loudness reports it in `result.loudnorm_mode`
+        (same name and values): "linear" (one gain) or "dynamic" (loudnorm fell back to range compression: the
+        input's range is above the LRA target, or a linear gain would pass the true-peak ceiling). ffmpeg-skill derives
+        it by loudnorm's own rule and checks it against loudnorm's print_format=json normalization_type; this skill
+        runs no ffmpeg of its own, so it reads that value and never guesses one. None when the located ffmpeg-skill
+        does not report it (releases before 3.6.7) or reports a value outside the two (ADR-26)."""
+        mode = result.get("loudnorm_mode")
+        return mode if mode in LOUDNORM_MODES else None
+
+    @staticmethod
     def _loudness_numbers(result: Dict[str, Any]) -> Dict[str, Any]:
         measured: Dict[str, Any] = {"silent": bool(result.get("silent"))}
         for key, name in (("input_i", "integrated_lufs"), ("input_tp", "true_peak_dbtp"), ("input_lra", "loudness_range_lu")):
@@ -824,7 +836,7 @@ class Executor:
                              {"reason": "loudness_result_missing"})
         measured = self._loudness_numbers(result)
         st.measurements["loudness"] = {"measured_by": (tool_data or {}).get("measured_by") or f"ffmpeg-skill/loudness ({st.node.type} result)", "target_lufs": p["target_lufs"], "true_peak_db": p["true_peak_db"],
-                                       "tolerance_lufs": p.get("tolerance_lufs"), **measured}
+                                       "tolerance_lufs": p.get("tolerance_lufs"), **measured, "loudnorm_mode": self._loudnorm_mode(result)}
         if st.node.type == "LOUDNESS_VERSION":
             self._check_version(st, measured, f"LOUDNESS_SET {p['loudness_set']} version {p['version_id']!r}")
             return
@@ -943,8 +955,10 @@ class Executor:
             for v in op.parameters["versions"]:
                 nid = f"op:{op.op_id}.{v['version_id']}"
                 st = self._states.get(nid)
+                measured = st.measurements.get("loudness") if st else None
                 versions.append({"version_id": v["version_id"], "node_id": nid, "profile": v.get("profile"), "target_lufs": v["target_lufs"], "true_peak_db": v["true_peak_db"],
-                                 "status": st.status if st else "planned", "measured": (st.measurements.get("loudness") if st else None), "outputs": by_node.get(nid, [])})
+                                 "status": st.status if st else "planned", "measured": measured, "outputs": by_node.get(nid, []),
+                                 "loudnorm_mode": (measured or {}).get("loudnorm_mode")})
             sets.append({"op_id": op.op_id, "tolerance_lufs": op.parameters["tolerance_lufs"], "versions": versions})
         return sets
 

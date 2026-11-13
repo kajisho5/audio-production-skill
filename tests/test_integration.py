@@ -667,6 +667,50 @@ def test_loudness_set_refuses_an_unreachable_version(workspace):
     assert {v["version_id"]: v["status"] for v in d["loudness_sets"][0]["versions"]} == {"ebu": "completed", "web": "failed"}
 
 
+def loudnorm_normalization_type(path, lufs, tp, lra):
+    """The mode ffmpeg's loudnorm itself reports (print_format=json normalization_type) for the second pass that
+    ffmpeg-skill/loudness runs: pass 1 measures, pass 2 is linear=true with those measurements. Test-only ffmpeg."""
+    import re
+    base = ["ffmpeg", "-hide_banner", "-nostdin", "-i", str(path), "-af"]
+    err = subprocess.run(base + [f"loudnorm=I={lufs}:TP={tp}:LRA={lra}:print_format=json", "-f", "null", "-"], capture_output=True, text=True, check=True).stderr
+    m = json.loads(re.search(r"\{[^{}]*\"input_i\"[^{}]*\}", err, re.S).group(0))
+    af = (f"loudnorm=I={lufs}:TP={tp}:LRA={lra}:measured_I={m['input_i']}:measured_TP={m['input_tp']}:measured_LRA={m['input_lra']}"
+          f":measured_thresh={m['input_thresh']}:offset={m['target_offset']}:linear=true:print_format=json")
+    err = subprocess.run(base + [af, "-f", "null", "-"], capture_output=True, text=True, check=True).stderr
+    return re.search(r'"normalization_type"\s*:\s*"(\w+)"', err).group(1), float(m["input_lra"])
+
+
+def test_loudness_set_reports_the_loudnorm_mode_of_every_version(workspace, skill_dir):
+    # ADR-26: an input whose range (18 LU) is above loudnorm's LRA target (11 LU, ffmpeg-skill's default) switches
+    # loudnorm to dynamic mode; the same input with an LRA target of 20 LU stays linear. Each version reports the
+    # mode as ffmpeg-skill/loudness does (result.loudnorm_mode), and it is what loudnorm's own JSON says.
+    from audio_production.adapter import FfmpegSkill
+    versions = [{"version_id": "ebu", "profile": "ebu_r128"},
+                {"version_id": "wide", "target_lufs": -23, "true_peak_db": -1, "loudness_range_lu": 20}]
+    outputs = [{"output_id": "ebu", "operation": "op:deliver.ebu", "path": "out/ebu.wav", "format": "wav"},
+               {"output_id": "wide", "operation": "op:deliver.wide", "path": "out/wide.wav", "format": "wav"}]
+    code, d = run(loudness_set_doc("wide.wav", versions, outputs))
+    assert code == 0 and d["ok"], d.get("error")
+    ffmpeg_says = {"ebu": loudnorm_normalization_type(workspace / "wide.wav", -23, -1, 11),
+                   "wide": loudnorm_normalization_type(workspace / "wide.wav", -23, -1, 20)}
+    assert ffmpeg_says["ebu"][0] == "dynamic" and ffmpeg_says["wide"][0] == "linear", ffmpeg_says
+    assert 17.0 <= ffmpeg_says["ebu"][1] <= 19.0, ffmpeg_says           # the fixture's range, as loudnorm measures it
+    reported = "loudnorm_mode" in json.dumps((FfmpegSkill(skill_dir).info().tools.get("loudness") or {}))
+    by_id = {v["version_id"]: v for v in d["loudness_sets"][0]["versions"]}
+    for vid, (mode, _) in ffmpeg_says.items():
+        v = by_id[vid]
+        # an ffmpeg-skill that does not report the mode (before 3.6.7) leaves it null: never a guess
+        assert v["loudnorm_mode"] == (mode if reported else None) and v["measured"]["loudnorm_mode"] == v["loudnorm_mode"], (vid, v)
+        assert abs(v["measured"]["integrated_lufs"] + 23) <= 0.5 and v["measured"]["true_peak_dbtp"] <= -1, v
+    # dynamic mode compressed the range; linear mode kept it
+    assert by_id["ebu"]["measured"]["loudness_range_lu"] < by_id["wide"]["measured"]["loudness_range_lu"] - 1.0, by_id
+    # a plan has not run loudnorm: no mode yet
+    import shutil
+    shutil.rmtree("out")
+    code, out, err = run_cli(["plan", "-", "--json"], json.dumps(loudness_set_doc("wide.wav", versions, outputs)))
+    assert [v["loudnorm_mode"] for v in one_json(out)["loudness_sets"][0]["versions"]] == [None, None]
+
+
 def test_loudness_set_dry_run_and_set_reference(workspace):
     versions = [{"version_id": "jp", "profile": "arib_tr_b32"}]
     outputs = [{"output_id": "jp", "operation": "op:deliver.jp", "path": "out/jp.wav", "format": "wav"}]
