@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.2 - 2026-11-13
+
+- docs: link the loudnorm / ebur128 comparison, tick roadmap step 12 (#37) (73889a6)
+
 ## v1.3.1 - 2026-11-13
 
 - docs: write down the loudness owner and engine (roadmap step 12, partly) (#36) (b9715ef)
