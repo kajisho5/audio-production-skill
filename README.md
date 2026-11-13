@@ -68,6 +68,11 @@ FFmpeg (`ffmpeg` + `ffprobe`) on PATH for ffmpeg-skill. Install: `pip install -e
   *audio project model*: sources, tracks, operation graph with deterministic identities, source ↔ timeline mapping,
   intermediate management, output validation and provenance. It never calls `ffmpeg` itself: every process it starts
   is `python3 <ffmpeg-skill>/scripts/{probe,audio,cut,loudness,join}.py` with a typed argv.
+- **Loudness: owner and engine.** This repository owns 音量・ラウドネス; ffmpeg-skill is the engine. `NORMALIZE` and
+  `LOUDNESS_SET` run through ffmpeg-skill `loudness`. The
+  agent's video path keeps calling `ffmpeg-skill/loudness` directly; that routing changes only after a measured comparison
+  of `loudnorm` and `ebur128` on the same files (video-production-agent step 34). See the
+  [Velisa ownership decisions 2026-11-12](https://github.com/kajisho5/Velisa/blob/main/docs/ecosystem/DECISION_LOG.md) (D23).
 - **audio-production-skill ≠ video-production-agent.** There is no Observation → Inference → Decision → ProductionPlan
   here. The agent decides; this skill executes one typed request and says exactly what happened.
 
