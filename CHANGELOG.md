@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.0 - 2026-11-13
+
+- feat: FILLER_REMOVE opt-in list ja-ambiguous (roadmap step 13) (#35) (b0b6df0)
+
 ## v1.2.1 - 2026-11-12
 
 - docs(roadmap): add the ownership decisions of 2026-11-12 (#34) (5c77e1b)
