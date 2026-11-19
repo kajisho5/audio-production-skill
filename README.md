@@ -126,7 +126,8 @@ derived from the tables the code runs on; there are no placeholder operations.
 `audio-production contract --check [FILE|-]` verifies the printed contract against the implementation and the README
 and, with a saved copy, classifies every difference as **breaking** (a pinned block, an operation's pinned fields, a
 removed key) or **additive** (a new key outside the pinned blocks); exit 1 on problems or breaking drift. CI runs it
-against `tests/contract/contract.json`; regenerate that file when a contract change is intended. Pinned blocks and
+against `tests/contract/contract.json`; regenerate that file when a contract change is intended. `contract/contract.json` is the same output committed as
+a file (`python contract/generate.py`), so a release's contract is `git show vX.Y.Z:contract/contract.json`. Pinned blocks and
 the versioning rules: [docs/contract.md](docs/contract.md).
 
 `provides` lists this Skill's fifteen operations by their cross-repository Capability id (`audio.gain`,
