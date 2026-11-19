@@ -352,3 +352,16 @@
     block and gets no key). The test checks the depth ffmpeg-skill reports against the one asked, and keeps the
     band-level measurement as the evidence on every ffmpeg-skill. Nothing is refused that ran before.
   - *Contract.* Additive: one new key inside `measurements`, outside the pinned blocks; no version bump is required.
+
+- **ADR-28 The release job tests its commit before pushing it; chore / ci / docs / test pull requests release nothing (Velisa ADR-023, D37).**
+  - *What broke elsewhere.* The release commit is pushed with the default token, so no workflow runs on it on main.
+    On 2026-11-19 two skills' mains broke this way (sound-design-skill, hyperframes-skill). Also, every merged pull
+    request released a patch, `ci:` changes included.
+  - *Choice.* The release job commits and tags locally, then runs `tests/test_unit.py`, `tests/test_contract_file.py`,
+    `tests/test_release_labels.py` and `tests/test_release_scripts.py` on that commit (the tests that need no FFmpeg or
+    ffmpeg-skill). Only then does it push. `.github/scripts/release_gate.py` (read by `compute_version.sh` as
+    `RELEASABLE`) lets a push release only when a pull request merged since the tag carries a release-level label or
+    no label at all. A pull request labelled only chore, ci, documentation, docs, test or maintenance releases nothing.
+    This is imagemagick-skill's rule. release-drafter's `default` accepts only major, minor or patch, so the gate runs
+    first, and chore / maintenance / ci / docs no longer map to a patch.
+  - *Contract.* Unchanged.
