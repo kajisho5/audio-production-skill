@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.4.3 - 2026-11-19
+
+- ci(release): test the release commit before pushing; no release for chore/ci/docs-only changes (#44) (6ce8aa8)
+
 ## v1.4.2 - 2026-11-19
 
 - ci: run contract-diff on every pull request (#42) (5ccb88f)
