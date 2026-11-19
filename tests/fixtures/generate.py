@@ -25,6 +25,9 @@ ffmpeg directly; the skill under test never does. Every fixture has a known cons
                20 dB): -14 LUFS under -1 dBTP is out of reach of a linear gain
   sfx.wav      4 s mono PCM 48 kHz, 2 kHz sine amplitude 0.2 (an effects track shorter than the programme)
   longbed.wav  8 s mono PCM 48 kHz, 220 Hz sine amplitude 0.1 (a music bed longer than the programme)
+  wide.wav     24 s mono PCM 48 kHz, 1 kHz sine alternating every 4 s between amplitude 0.2 and 18 dB below it (measured
+               LRA 18.0 LU, -17.3 LUFS, -14.0 dBTP, FFmpeg 6.1): above loudnorm's default LRA target of 11 LU, so loudnorm
+               runs its second pass in dynamic mode; with an LRA target of 20 LU it stays linear
   text.txt     not media"""
 from __future__ import annotations
 
@@ -42,6 +45,7 @@ TONE_AMBIGUOUS = ("(0.1+0.4*(between(t\\,0\\,0.5)+between(t\\,1\\,2.5)+between(t
 TONE_KEYED = "0.5*sin(2*PI*1000*t)*between(t\\,2\\,5)"
 TONE_PROGRAMME = "(0.1+0.3*between(mod(t\\,1)\\,0.5\\,0.55))*sin(2*PI*1000*t)"
 TONE_PEAKY = "(0.05+0.6*between(mod(t\\,1)\\,0\\,0.05))*sin(2*PI*1000*t)"
+TONE_WIDE = "(0.2-0.2*(1-pow(10\\,-18/20))*lt(mod(t\\,8)\\,4))*sin(2*PI*1000*t)"
 
 
 def available() -> bool:
@@ -58,7 +62,7 @@ def build_all(directory: Path) -> Dict[str, Path]:
     f = {k: d / v for k, v in {"tone": "tone.wav", "stereo": "stereo.m4a", "gated": "gated.wav", "surround": "surround.wav", "silence": "silence.wav",
                                "video": "video.mp4", "noaudio": "noaudio.mp4", "multitrack": "multitrack.mka", "fillers": "fillers.wav",
                                "ambiguous": "ambiguous.wav",
-                               "keyed": "keyed.wav", "bed": "bed.wav", "programme": "programme.wav", "peaky": "peaky.wav", "sfx": "sfx.wav", "longbed": "longbed.wav", "text": "text.txt"}.items()}
+                               "keyed": "keyed.wav", "bed": "bed.wav", "programme": "programme.wav", "peaky": "peaky.wav", "sfx": "sfx.wav", "longbed": "longbed.wav", "wide": "wide.wav", "text": "text.txt"}.items()}
     _run(["-f", "lavfi", "-i", f"aevalsrc='{TONE}':s=48000:c=mono", "-t", "6", "-c:a", "pcm_s16le", str(f["tone"])])
     _run(["-f", "lavfi", "-i", "aevalsrc='0.1*sin(2*PI*440*t)|0.1*sin(2*PI*440*t)':s=48000:c=stereo", "-t", "4", "-c:a", "aac", str(f["stereo"])])
     _run(["-f", "lavfi", "-i", f"aevalsrc='{TONE_GATED}':s=48000:c=mono", "-t", "6", "-c:a", "pcm_s16le", str(f["gated"])])
@@ -75,5 +79,6 @@ def build_all(directory: Path) -> Dict[str, Path]:
     _run(["-f", "lavfi", "-i", f"aevalsrc='{TONE_AMBIGUOUS}':s=48000:c=mono", "-t", "8.5", "-c:a", "pcm_s16le", str(f["ambiguous"])])
     _run(["-f", "lavfi", "-i", "aevalsrc='0.2*sin(2*PI*2000*t)':s=48000:c=mono", "-t", "4", "-c:a", "pcm_s16le", str(f["sfx"])])
     _run(["-f", "lavfi", "-i", "aevalsrc='0.1*sin(2*PI*220*t)':s=48000:c=mono", "-t", "8", "-c:a", "pcm_s16le", str(f["longbed"])])
+    _run(["-f", "lavfi", "-i", f"aevalsrc='{TONE_WIDE}':s=48000:c=mono", "-t", "24", "-c:a", "pcm_s16le", str(f["wide"])])
     f["text"].write_text("not media\n", encoding="utf-8")
     return f

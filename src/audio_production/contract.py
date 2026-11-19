@@ -144,7 +144,11 @@ def skill_contract() -> Dict[str, Any]:
                      "defaults": "none for target / true peak: the caller or profile decides", "measurement_for_decisions": "media-analysis-skill (loudness kind); this skill only verifies its own output",
                      "profiles": {k: dict(v) for k, v in LOUDNESS_PROFILES.items()}, "default_profile": None,
                      "loudness_set": "LOUDNESS_SET writes several versions of one input in one run; each version must measure within tolerance_lufs of its target and at or under its "
-                                     "true-peak ceiling (no slack), on the intermediate and on every delivered output; response key loudness_sets"},
+                                     "true-peak ceiling (no slack), on the intermediate and on every delivered output; response key loudness_sets",
+                     "loudnorm_mode": "per LOUDNESS_SET version (loudness_sets[].versions[].loudnorm_mode) and in every loudness measurement (measurements.loudness.loudnorm_mode): "
+                                      "the mode loudnorm ran its second pass in, as ffmpeg-skill/loudness reports it (result.loudnorm_mode, same name and values): linear (one gain) "
+                                      "or dynamic (loudnorm fell back to range compression: the input's range is above the LRA target, loudness_range_lu or ffmpeg-skill's default, "
+                                      "or a linear gain would pass the true-peak ceiling); null when the located ffmpeg-skill does not report it, and in a plan"},
         "execution": {"mode": "local", "canonical_invocation": ["audio-production", "run", "-", "--json"], "stdin": REQUEST_SCHEMA_ID,
                       "stdout": f"exactly one {SKILL_ID}/response@{RESPONSE_SCHEMA_VERSION} document", "stderr": "diagnostics only",
                       "executables": ["python3 <ffmpeg-skill>/scripts/{probe,audio,cut,loudness,join}.py (argv lists)"], "executable_resolution": "ffmpeg-skill directory: --ffmpeg-skill, AUDIO_PRODUCTION_FFMPEG_SKILL_DIR, VIDEO_AGENT_FFMPEG_SKILL_DIR, ~/.claude/skills/ffmpeg-skill, ./vendor/ffmpeg-skill, ../ffmpeg-skill; ffmpeg/ffprobe: PATH lookup by ffmpeg-skill",
