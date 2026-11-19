@@ -38,12 +38,18 @@ python -m pytest -q                                                 # ~90 s with
 python -m pyflakes src tests && python -m mypy src/audio_production --ignore-missing-imports
 audio-production doctor --json
 audio-production contract --check tests/contract/contract.json --json
+python contract/generate.py --check                                 # contract/contract.json is current
 ```
+
+`contract/contract.json` is the contract as a committed file (byte for byte the `contract --json` output), so any
+tag's contract can be read with `git show <tag>:contract/contract.json` without running the code. Regenerate it with
+`python contract/generate.py`; `tests/test_contract_file.py` fails when it is stale, and the release workflow
+regenerates it after the version bump.
 
 ## Rules for changes
 
 - A contract change inside the pinned blocks (docs/contract.md) is breaking for video-production-agent's pin:
-  bump `VERSION` (`src/audio_production/__init__.py` and `pyproject.toml`), regenerate `tests/contract/contract.json`,
+  bump `VERSION` (`src/audio_production/__init__.py` and `pyproject.toml`), regenerate `tests/contract/contract.json` and `contract/contract.json`,
   and note in the PR that the agent must re-pin. Additive keys are fine within a version.
 - Never claim an operation the code cannot run: gaps go to `model.UNSUPPORTED_OPERATIONS` with the reason.
 - New ffmpeg-skill features: verify the real behaviour first (docs/ffmpeg-skill.md records measurements), then
