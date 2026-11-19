@@ -1,0 +1,1744 @@
+{
+  "schema": "audio-production/contract@1",
+  "skill_id": "audio-production",
+  "id": "audio-production",
+  "name": "audio-production-skill",
+  "package": "audio-production-skill",
+  "version": "1.3.4",
+  "kind": "execution",
+  "role": "audio production (processing); not measurement, not decision",
+  "description": "Deterministic audio production execution: gain, sample-accurate trim / cut, silence removal (explicit ranges), filler removal (caller-supplied word timings), fades, EBU R128 loudness normalisation, several delivery loudness versions in one run, stems (dialogue / music / effects files that sum to the mix), mix (with sidechain ducking), concat, mono/stereo/downmix, FFT noise reduction, typed dynamics (gate / compressor / limiter), speech clean-up presets, format conversion and audio extraction from video containers; typed operation graph in, validated artifacts with provenance out. Not an AI agent.",
+  "repository": "https://github.com/kajisho5/audio-production-skill",
+  "not_provided": [
+    "AI reasoning",
+    "decisions",
+    "production plans",
+    "loudness or silence measurement for decisions (media-analysis-skill)",
+    "speech recognition",
+    "video editing",
+    "arbitrary ffmpeg filters",
+    "shell execution",
+    "network access"
+  ],
+  "tools": [
+    {
+      "tool_id": "audio-production/run",
+      "skill_id": "audio-production",
+      "version": "1.3.4",
+      "role": "execution",
+      "description": "Execute a typed AudioProject (operation graph) and write validated audio artifacts with provenance",
+      "inputs": [
+        "request document (stdin)"
+      ],
+      "input_type": "audio-production/request@1",
+      "produces_output": true,
+      "writes_media": true,
+      "deterministic": true,
+      "idempotency_hint": "content_equivalent; intermediates reused by deterministic operation id",
+      "operations": [
+        "CONCAT",
+        "CUT",
+        "DOWNMIX",
+        "DYNAMICS",
+        "FADE_IN",
+        "FADE_OUT",
+        "FILLER_REMOVE",
+        "GAIN",
+        "LOUDNESS_SET",
+        "MIX",
+        "MONO",
+        "NOISE_REDUCTION",
+        "NORMALIZE",
+        "SILENCE_REMOVE",
+        "STEMS",
+        "STEREO",
+        "TRIM",
+        "VOICE_CLEANUP"
+      ],
+      "supports": {
+        "dry_run": true,
+        "timeout": true,
+        "cancel": true,
+        "validate": true
+      },
+      "verification": "every artifact is probed (audio stream, duration, channels, sample rate, codec, sha256); NORMALIZE is re-measured; every LOUDNESS_SET version and its delivered outputs are re-measured against tolerance and ceiling",
+      "provenance": "OBSERVED",
+      "mutates_input": false,
+      "delegates_to": [
+        "ffmpeg-skill/probe",
+        "ffmpeg-skill/audio",
+        "ffmpeg-skill/cut",
+        "ffmpeg-skill/loudness",
+        "ffmpeg-skill/join"
+      ]
+    }
+  ],
+  "provides": [
+    {
+      "id": "audio.concat",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "CONCAT"
+    },
+    {
+      "id": "audio.cut",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "CUT"
+    },
+    {
+      "id": "audio.downmix",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "DOWNMIX"
+    },
+    {
+      "id": "audio.dynamics",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "DYNAMICS"
+    },
+    {
+      "id": "audio.fade_in",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "FADE_IN"
+    },
+    {
+      "id": "audio.fade_out",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "FADE_OUT"
+    },
+    {
+      "id": "audio.filler_remove",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "FILLER_REMOVE"
+    },
+    {
+      "id": "audio.gain",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "GAIN"
+    },
+    {
+      "id": "audio.loudness_set",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "LOUDNESS_SET"
+    },
+    {
+      "id": "audio.mix",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "MIX"
+    },
+    {
+      "id": "audio.mono",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "MONO"
+    },
+    {
+      "id": "audio.noise_reduction",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "NOISE_REDUCTION"
+    },
+    {
+      "id": "audio.normalize",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "NORMALIZE"
+    },
+    {
+      "id": "audio.silence_remove",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "SILENCE_REMOVE"
+    },
+    {
+      "id": "audio.stems",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "STEMS"
+    },
+    {
+      "id": "audio.stereo",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "STEREO"
+    },
+    {
+      "id": "audio.trim",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "TRIM"
+    },
+    {
+      "id": "audio.voice_cleanup",
+      "lifecycle": "EXPERIMENTAL",
+      "tool_id": "audio-production/run",
+      "operation": "VOICE_CLEANUP"
+    }
+  ],
+  "dependencies": [
+    {
+      "skill_id": "ffmpeg-skill",
+      "version_range": ">=1.0 <3.0",
+      "range_of": "contract_version",
+      "required": true,
+      "tools": [
+        "ffmpeg-skill/probe",
+        "ffmpeg-skill/audio",
+        "ffmpeg-skill/cut",
+        "ffmpeg-skill/loudness",
+        "ffmpeg-skill/join"
+      ]
+    }
+  ],
+  "operations": [
+    {
+      "type": "GAIN",
+      "description": "Apply a fixed gain in dB",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "gain_db": {
+          "type": "number",
+          "required": true,
+          "min": -60.0,
+          "max": 60.0,
+          "description": "gain in dB (negative attenuates)"
+        },
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:volume"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "TRIM",
+      "description": "Keep one source time range [start, end)",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "start": {
+          "type": "number",
+          "required": true,
+          "min": 0.0,
+          "max": 86400.0,
+          "description": "source time in seconds"
+        },
+        "end": {
+          "type": "number",
+          "required": true,
+          "min": 0.0,
+          "max": 86400.0,
+          "description": "source time in seconds, > start"
+        }
+      },
+      "tool": "ffmpeg-skill/cut",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le"
+      ],
+      "keeps_timeline": false,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "CUT",
+      "description": "Remove explicit source time ranges; the remainder is joined in order",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "remove": {
+          "type": "array",
+          "required": true,
+          "description": "ranges to remove, sorted, non-overlapping",
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "number"
+              },
+              "end": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "tool": "ffmpeg-skill/cut",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le"
+      ],
+      "keeps_timeline": false,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "SILENCE_REMOVE",
+      "description": "Remove explicit silence ranges (decided by the caller) with margin and minimum duration rules",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "ranges": {
+          "type": "array",
+          "required": true,
+          "description": "silence ranges to remove, sorted, non-overlapping (as observed by the caller, e.g. media-analysis-skill)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "number"
+              },
+              "end": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "margin": {
+          "type": "number",
+          "required": false,
+          "min": 0.0,
+          "max": 10.0,
+          "default": 0.0,
+          "description": "seconds of the range kept on each side (the removed part shrinks by margin at both ends)"
+        },
+        "min_duration": {
+          "type": "number",
+          "required": false,
+          "min": 0.0,
+          "max": 86400.0,
+          "default": 0.0,
+          "description": "ranges shorter than this (after margin) are not removed"
+        },
+        "threshold_db": {
+          "type": "number",
+          "required": false,
+          "min": -120.0,
+          "max": 0.0,
+          "description": "threshold the caller used to find the ranges; recorded in provenance, not applied"
+        }
+      },
+      "tool": "ffmpeg-skill/cut",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le"
+      ],
+      "keeps_timeline": false,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "FADE_IN",
+      "description": "Linear fade in from the start",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "duration": {
+          "type": "number",
+          "required": true,
+          "min": 0.001,
+          "max": 3600.0,
+          "description": "seconds"
+        },
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:afade"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "FADE_OUT",
+      "description": "Linear fade out to the end",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "duration": {
+          "type": "number",
+          "required": true,
+          "min": 0.001,
+          "max": 3600.0,
+          "description": "seconds"
+        },
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:afade"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "NORMALIZE",
+      "description": "Two-pass EBU R128 loudness normalisation (ffmpeg loudnorm, linear mode)",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "target_lufs": {
+          "type": "number",
+          "required": true,
+          "min": -70.0,
+          "max": -5.0,
+          "description": "integrated loudness target in LUFS; no default, the caller / profile decides"
+        },
+        "true_peak_db": {
+          "type": "number",
+          "required": true,
+          "min": -20.0,
+          "max": 0.0,
+          "description": "true-peak ceiling in dBTP; no default"
+        },
+        "loudness_range_lu": {
+          "type": "number",
+          "required": false,
+          "min": 1.0,
+          "max": 50.0,
+          "description": "loudness range target in LU (omit: ffmpeg-skill default 11)"
+        },
+        "tolerance_lufs": {
+          "type": "number",
+          "required": false,
+          "min": 0.0,
+          "max": 10.0,
+          "description": "verification: measured integrated loudness must be within this of target_lufs, else VALIDATION_ERROR (omit: measure and report only)"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "required": false,
+          "enum": [
+            8000,
+            11025,
+            16000,
+            22050,
+            24000,
+            32000,
+            44100,
+            48000,
+            88200,
+            96000
+          ],
+          "description": "output sample rate (omit: keep the input's)"
+        },
+        "profile": {
+          "type": "string",
+          "required": false,
+          "max_length": 64,
+          "description": "label of the loudness profile the caller applied; recorded in provenance only"
+        }
+      },
+      "tool": "ffmpeg-skill/loudness",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:loudnorm"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "MIX",
+      "description": "Sum 2..8 inputs; output duration follows the first input (ffmpeg-skill amix duration=first); optionally one bed ducked under input 0",
+      "inputs": {
+        "min": 2,
+        "max": 8
+      },
+      "parameters": {
+        "levels": {
+          "type": "array",
+          "required": false,
+          "description": "per-input {gain_db, mute}, aligned with inputs (omit: 0 dB, unmuted)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "gain_db": {
+                "type": "number",
+                "min": -60,
+                "max": 60
+              },
+              "mute": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "duck": {
+          "type": "object",
+          "required": false,
+          "description": "sidechain ducking (ffmpeg-skill/audio --duck): the input named by duck.input is lowered by amount_db while input 0 is above the threshold; every other input is mixed un-ducked. Input 0 and the ducked input must be unmuted. Needs an ffmpeg-skill whose contract declares --duck (and --duck-threshold / --duck-attack / --duck-release when those are given); otherwise refused with TOOL_ERROR before a tool runs",
+          "properties": {
+            "input": {
+              "type": "integer",
+              "required": true,
+              "min": 1,
+              "max": 7,
+              "description": "index of the input that is ducked (a bed); input 0 is the key it ducks under"
+            },
+            "amount_db": {
+              "type": "number",
+              "required": true,
+              "min": 0.0,
+              "max": 60.0,
+              "description": "how far the bed is lowered while input 0 is above the threshold, dB (ffmpeg-skill --duck-amount)"
+            },
+            "threshold_db": {
+              "type": "number",
+              "required": false,
+              "min": -60.0,
+              "max": 0.0,
+              "description": "input 0 level in dBFS above which the bed ducks (--duck-threshold; omit: ffmpeg-skill's default)"
+            },
+            "attack_ms": {
+              "type": "number",
+              "required": false,
+              "min": 0.01,
+              "max": 2000.0,
+              "description": "ms the bed takes to duck (--duck-attack; omit: ffmpeg-skill's default)"
+            },
+            "release_ms": {
+              "type": "number",
+              "required": false,
+              "min": 0.01,
+              "max": 9000.0,
+              "description": "ms the bed takes to come back (--duck-release; omit: ffmpeg-skill's default)"
+            }
+          },
+          "required_properties": [
+            "input",
+            "amount_db"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:amix"
+      ],
+      "keeps_timeline": false,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "MONO",
+      "description": "Down-mix to one channel (stereo input: 0.5*L + 0.5*R)",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:pan"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "STEREO",
+      "description": "Force two channels (mono is duplicated to both sides)",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:aformat"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "DOWNMIX",
+      "description": "Down-mix 5.1 / 7.1 to stereo with standard centre / LFE / surround weights",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:pan"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "NOISE_REDUCTION",
+      "description": "FFT noise reduction (ffmpeg afftdn, adaptive noise tracking)",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "mode": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "fft"
+          ],
+          "description": "only 'fft' (afftdn) is implemented"
+        },
+        "strength_db": {
+          "type": "number",
+          "required": true,
+          "min": 20.0,
+          "max": 60.0,
+          "description": "noise floor to remove in dB (afftdn nf=-strength_db; afftdn accepts only -80..-20, hence 20..60)"
+        },
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:afftdn"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "DYNAMICS",
+      "description": "Typed dynamics: gate -> compressor -> limiter (fixed order); at least one stage",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "compressor": {
+          "type": "object",
+          "required": false,
+          "description": "acompressor parameters (omitted fields keep ffmpeg's defaults, recorded by ffmpeg-skill)",
+          "properties": {
+            "threshold_db": {
+              "type": "number",
+              "min": -60.0,
+              "max": 0.0,
+              "description": "dBFS above which gain is reduced"
+            },
+            "ratio": {
+              "type": "number",
+              "min": 1.0,
+              "max": 20.0,
+              "description": "compression ratio"
+            },
+            "attack_ms": {
+              "type": "number",
+              "min": 0.01,
+              "max": 2000.0,
+              "description": "attack in ms"
+            },
+            "release_ms": {
+              "type": "number",
+              "min": 0.01,
+              "max": 9000.0,
+              "description": "release in ms"
+            },
+            "makeup_db": {
+              "type": "number",
+              "min": 0.0,
+              "max": 36.0,
+              "description": "make-up gain in dB"
+            },
+            "knee_db": {
+              "type": "number",
+              "min": 1.0,
+              "max": 8.0,
+              "description": "knee width in dB"
+            }
+          },
+          "additionalProperties": false
+        },
+        "limiter": {
+          "type": "object",
+          "required": false,
+          "description": "alimiter parameters",
+          "properties": {
+            "ceiling_db": {
+              "type": "number",
+              "min": -24.0,
+              "max": 0.0,
+              "description": "look-ahead limiter ceiling in dBFS"
+            },
+            "attack_ms": {
+              "type": "number",
+              "min": 0.1,
+              "max": 80.0,
+              "description": "attack in ms"
+            },
+            "release_ms": {
+              "type": "number",
+              "min": 1.0,
+              "max": 8000.0,
+              "description": "release in ms"
+            }
+          },
+          "additionalProperties": false
+        },
+        "gate": {
+          "type": "object",
+          "required": false,
+          "description": "agate parameters",
+          "properties": {
+            "threshold_db": {
+              "type": "number",
+              "min": -60.0,
+              "max": 0.0,
+              "description": "dBFS below which the gate closes"
+            },
+            "ratio": {
+              "type": "number",
+              "min": 1.0,
+              "max": 9000.0,
+              "description": "gate ratio"
+            },
+            "attack_ms": {
+              "type": "number",
+              "min": 0.01,
+              "max": 9000.0,
+              "description": "attack in ms"
+            },
+            "release_ms": {
+              "type": "number",
+              "min": 0.01,
+              "max": 9000.0,
+              "description": "release in ms"
+            },
+            "range_db": {
+              "type": "number",
+              "min": -90.0,
+              "max": 0.0,
+              "description": "attenuation when closed in dB"
+            },
+            "knee_db": {
+              "type": "number",
+              "min": 1.0,
+              "max": 8.0,
+              "description": "knee width in dB"
+            }
+          },
+          "additionalProperties": false
+        },
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:acompressor",
+        "filter:alimiter",
+        "filter:agate"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "VOICE_CLEANUP",
+      "description": "Speech clean-up preset (ffmpeg-skill/audio --voice): a fixed filter chain per level, nothing tuned here",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "level": {
+          "type": "string",
+          "required": true,
+          "enum": [
+            "light",
+            "medium",
+            "strong"
+          ],
+          "description": "light = highpass 80 Hz + gentle compression; medium = highpass, de-esser, FFT denoise (fixed -25 dB floor), compression; strong = medium + harder de-esser, second compressor, limiter at -1 dBFS. No default: the caller decides. light / strong need an ffmpeg-skill whose contract declares the --voice levels (older releases: medium only, anything else is refused with TOOL_ERROR before a tool runs)"
+        },
+        "audio_stream": {
+          "type": "integer",
+          "required": false,
+          "min": 0,
+          "default": 0,
+          "description": "0-based index of the input's audio stream to process (ffmpeg-skill audio.py --audio-stream; probe lists a source's streams under audio_streams); ffmpeg-skill refuses an index the input does not have"
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:highpass",
+        "filter:deesser",
+        "filter:afftdn",
+        "filter:acompressor",
+        "filter:alimiter"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "FILLER_REMOVE",
+      "description": "Remove filler words at caller-supplied word timings (e.g. a transcript's word timestamps) matched against a caller-chosen lexicon; the remainder is joined in order, sample-accurate. No speech recognition happens here",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "words": {
+          "type": "array",
+          "required": false,
+          "description": "word timings on the input's timeline: [{start, end, text, confidence?}] (seconds); exactly one of words / transcript",
+          "max_items": 100000,
+          "items": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "number",
+                "min": 0
+              },
+              "end": {
+                "type": "number"
+              },
+              "text": {
+                "type": "string",
+                "max_length": 128
+              },
+              "confidence": {
+                "type": "number",
+                "min": 0,
+                "max": 1
+              }
+            },
+            "required": [
+              "start",
+              "end",
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "transcript": {
+          "type": "object",
+          "required": false,
+          "description": "a transcription-skill/transcript/0.1 document; the words of its segments are used. A segment whose words are null (no word timestamps) is refused (INVALID_REQUEST, reason word_timestamps_missing): pass words instead to accept partial coverage",
+          "schema": "transcription-skill/transcript/0.1",
+          "reads": [
+            "schema",
+            "segments[].words[].{start, end, text, confidence}",
+            "id",
+            "asset_id",
+            "language"
+          ]
+        },
+        "lexicon": {
+          "type": "object",
+          "required": true,
+          "description": "which tokens are fillers: {presets?: ['en', 'ja'], words?: [str], keep?: [str]}; presets + words - keep, non-empty. No default: the caller chooses. Matching is exact on normalised text (NFKC, case-folded, punctuation dropped, long-vowel marks unified); a run of up to 3 touching tokens counts as one word",
+          "properties": {
+            "presets": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "en",
+                  "ja"
+                ]
+              }
+            },
+            "words": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "max_length": 64
+              },
+              "max_items": 256
+            },
+            "keep": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "max_length": 64
+              },
+              "max_items": 256
+            }
+          },
+          "additionalProperties": false
+        },
+        "pad": {
+          "type": "number",
+          "required": false,
+          "min": 0.0,
+          "max": 0.5,
+          "default": 0.0,
+          "description": "seconds added to each side of a removed filler, never into a neighbouring word"
+        },
+        "merge_gap": {
+          "type": "number",
+          "required": false,
+          "min": 0.0,
+          "max": 2.0,
+          "default": 0.0,
+          "description": "consecutive fillers with no other word between them and at most this many seconds apart are removed as one range (the gap goes too)"
+        },
+        "declick_ms": {
+          "type": "number",
+          "required": false,
+          "min": 0.0,
+          "max": 200.0,
+          "description": "fade in ms on each side of every join (ffmpeg-skill/cut --declick-ms; 0 = butt joins). Omit: ffmpeg-skill's own behaviour. A value above 0 needs an ffmpeg-skill whose contract declares --declick-ms (otherwise TOOL_ERROR before a tool runs)"
+        }
+      },
+      "tool": "ffmpeg-skill/cut",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le"
+      ],
+      "keeps_timeline": false,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "LOUDNESS_SET",
+      "description": "One master into several delivery loudness versions in one run: each version is a two-pass loudnorm (true-peak ceiling) of the same input, re-measured and refused unless within tolerance_lufs of its target and at or under its true-peak ceiling; each delivered output is measured again. A version is referenced as op:<op_id>.<version_id> (the set itself is not an artifact)",
+      "inputs": {
+        "min": 1,
+        "max": 1
+      },
+      "parameters": {
+        "versions": {
+          "type": "array",
+          "required": true,
+          "description": "1..8 versions: {version_id, profile | target_lufs + true_peak_db, loudness_range_lu?, sample_rate?}; profiles ['arib_tr_b32', 'atsc_a85', 'ebu_r128'] (none is a default)",
+          "min_items": 1,
+          "max_items": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "version_id": {
+                "type": "string",
+                "required": true,
+                "description": "id of the version; the version is referenced as op:<op_id>.<version_id>"
+              },
+              "profile": {
+                "type": "string",
+                "required": false,
+                "enum": [
+                  "arib_tr_b32",
+                  "atsc_a85",
+                  "ebu_r128"
+                ],
+                "description": "a delivery profile (sets target_lufs and true_peak_db); exactly one of profile / target_lufs + true_peak_db"
+              },
+              "target_lufs": {
+                "type": "number",
+                "required": false,
+                "min": -70.0,
+                "max": -5.0,
+                "description": "stated integrated loudness target in LUFS (with true_peak_db; e.g. a streaming platform's own value)"
+              },
+              "true_peak_db": {
+                "type": "number",
+                "required": false,
+                "min": -20.0,
+                "max": 0.0,
+                "description": "stated true-peak ceiling in dBTP (with target_lufs)"
+              },
+              "loudness_range_lu": {
+                "type": "number",
+                "required": false,
+                "min": 1.0,
+                "max": 50.0,
+                "description": "loudness range target in LU (omit: ffmpeg-skill default 11)"
+              },
+              "sample_rate": {
+                "type": "integer",
+                "required": false,
+                "enum": [
+                  8000,
+                  11025,
+                  16000,
+                  22050,
+                  24000,
+                  32000,
+                  44100,
+                  48000,
+                  88200,
+                  96000
+                ],
+                "description": "output sample rate of this version (omit: keep the input's)"
+              }
+            },
+            "required": [
+              "version_id"
+            ],
+            "one_of": [
+              [
+                "profile"
+              ],
+              [
+                "target_lufs",
+                "true_peak_db"
+              ]
+            ],
+            "additionalProperties": false
+          }
+        },
+        "tolerance_lufs": {
+          "type": "number",
+          "required": true,
+          "min": 0.0,
+          "max": 10.0,
+          "description": "every version's measured integrated loudness must be within this of its target (LU), else VALIDATION_ERROR"
+        }
+      },
+      "tool": "ffmpeg-skill/loudness",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:loudnorm"
+      ],
+      "keeps_timeline": true,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "STEMS",
+      "description": "Write the inputs of a mix as separate stem files (e.g. dialogue, music, effects), each the programme's length (input 0's duration, as MIX) and aligned to its first sample; every input belongs to exactly one stem, so the stems summed equal a MIX of the same inputs and levels. A stem is referenced as op:<op_id>.<stem_id> (the set itself is not an artifact)",
+      "inputs": {
+        "min": 2,
+        "max": 8
+      },
+      "parameters": {
+        "stems": {
+          "type": "array",
+          "required": true,
+          "description": "1..8 stems: {stem_id, inputs: [input index], role?: ['dialogue', 'music', 'effects', 'other']}; every input index in exactly one stem",
+          "min_items": 1,
+          "max_items": 8,
+          "items": {
+            "type": "object",
+            "properties": {
+              "stem_id": {
+                "type": "string"
+              },
+              "inputs": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "min": 0
+                }
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "dialogue",
+                  "music",
+                  "effects",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "stem_id",
+              "inputs"
+            ],
+            "additionalProperties": false,
+            "rule": "every input index in exactly one stem"
+          }
+        },
+        "levels": {
+          "type": "array",
+          "required": false,
+          "description": "per-input {gain_db}, aligned with inputs, as the MIX they sum to (omit: 0 dB); mute is not accepted (a muted input belongs to no stem: leave it out of the inputs)",
+          "items": {
+            "type": "object",
+            "properties": {
+              "gain_db": {
+                "type": "number",
+                "min": -60,
+                "max": 60
+              },
+              "mute": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "tool": "ffmpeg-skill/audio",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:amix"
+      ],
+      "keeps_timeline": false,
+      "deterministic": "content_equivalent"
+    },
+    {
+      "type": "CONCAT",
+      "description": "Concatenate 2..32 inputs in order (ffmpeg concat), optional equal-power crossfade",
+      "inputs": {
+        "min": 2,
+        "max": 32
+      },
+      "parameters": {
+        "crossfade": {
+          "type": "number",
+          "required": false,
+          "min": 0.0,
+          "max": 30.0,
+          "default": 0.0,
+          "description": "seconds of acrossfade between clips (0 = butt join)"
+        },
+        "sample_rate": {
+          "type": "integer",
+          "required": false,
+          "enum": [
+            8000,
+            11025,
+            16000,
+            22050,
+            24000,
+            32000,
+            44100,
+            48000,
+            88200,
+            96000
+          ],
+          "description": "output sample rate (omit: the first input's)"
+        },
+        "channels": {
+          "type": "integer",
+          "required": false,
+          "enum": [
+            1,
+            2,
+            6,
+            8
+          ],
+          "description": "output channel count (omit: the widest input)"
+        }
+      },
+      "tool": "ffmpeg-skill/join",
+      "required_capabilities": [
+        "ffmpeg-skill",
+        "ffmpeg",
+        "ffprobe",
+        "encoder:pcm_s16le",
+        "filter:acrossfade"
+      ],
+      "keeps_timeline": false,
+      "deterministic": "content_equivalent"
+    }
+  ],
+  "filler_lexicons": {
+    "presets": {
+      "en": [
+        "um",
+        "umm",
+        "uh",
+        "uhh",
+        "uhm",
+        "erm",
+        "er",
+        "hmm",
+        "mm",
+        "ah"
+      ],
+      "ja": [
+        "\u3048\u30fc",
+        "\u3048\u30fc\u3068",
+        "\u3048\u30fc\u3063\u3068",
+        "\u3048\u3063\u3068",
+        "\u3048\u3068",
+        "\u3042\u30fc",
+        "\u3042\u306e\u30fc",
+        "\u305d\u306e\u30fc",
+        "\u3046\u30fc\u3093",
+        "\u3093\u30fc",
+        "\u3048\u3048\u3068"
+      ]
+    },
+    "default": "none: FILLER_REMOVE.lexicon is required",
+    "matching": "exact on normalised text (NFKC, case-folded, punctuation and whitespace dropped, long-vowel marks unified); runs of up to 3 tokens at most 0.05s apart count as one word; the longest run wins",
+    "opt_in": {
+      "ja-ambiguous": [
+        "\u3042\u306e",
+        "\u305d\u306e",
+        "\u307e\u3042",
+        "\u306a\u3093\u304b"
+      ]
+    },
+    "opt_in_use": "not presets and never a default: words that are also ordinary words. A caller who wants one list cut copies it into FILLER_REMOVE.lexicon.words. Every token (or run of touching tokens) equal to one of them is cut, whatever it means in the sentence; a longer token that contains one (\"\u3042\u306e\u4eba\") is kept. Each such removal is a warning and is listed in measurements.filler_remove.ambiguous"
+  },
+  "unsupported_operations": [
+    {
+      "type": "CHANNEL_MAP",
+      "status": "not_implemented",
+      "reason": "ffmpeg-skill exposes no typed channel mapping (only --mono / --stereo / --downmix, provided as MONO / STEREO / DOWNMIX)"
+    },
+    {
+      "type": "RESAMPLE",
+      "status": "not_implemented",
+      "reason": "ffmpeg-skill/audio has no sample-rate flag; only loudness --sample-rate and join --sample-rate exist (provided as NORMALIZE.sample_rate and CONCAT.sample_rate)"
+    },
+    {
+      "type": "FORMAT_CONVERT",
+      "status": "not_implemented",
+      "reason": "format conversion is an AudioOutput property (outputs[].format), not an operation"
+    }
+  ],
+  "output_formats": {
+    "wav": {
+      "extension": ".wav",
+      "codec": "pcm_s16le",
+      "required_capability": "encoder:pcm_s16le",
+      "lossless": true
+    },
+    "flac": {
+      "extension": ".flac",
+      "codec": "flac",
+      "required_capability": "encoder:flac",
+      "lossless": true
+    },
+    "mp3": {
+      "extension": ".mp3",
+      "codec": "mp3",
+      "required_capability": "encoder:libmp3lame",
+      "lossless": false
+    },
+    "m4a": {
+      "extension": ".m4a",
+      "codec": "aac",
+      "required_capability": "encoder:aac",
+      "lossless": false
+    },
+    "aac": {
+      "extension": ".aac",
+      "codec": "aac",
+      "required_capability": "encoder:aac",
+      "lossless": false
+    },
+    "ogg": {
+      "extension": ".ogg",
+      "codec": "vorbis",
+      "required_capability": "encoder:libvorbis",
+      "lossless": false
+    },
+    "opus": {
+      "extension": ".opus",
+      "codec": "opus",
+      "required_capability": "encoder:libopus",
+      "lossless": false
+    }
+  },
+  "intermediate_format": {
+    "format": "wav",
+    "codec": "pcm_s16le",
+    "work_dir": "<workspace>/.audio-production/<project_id>/"
+  },
+  "channel_layouts": [
+    "5.1",
+    "7.1",
+    "mono",
+    "stereo"
+  ],
+  "sample_rates": [
+    8000,
+    11025,
+    16000,
+    22050,
+    24000,
+    32000,
+    44100,
+    48000,
+    88200,
+    96000
+  ],
+  "max_mix_inputs": 8,
+  "max_concat_inputs": 32,
+  "timeline": {
+    "unit": "seconds (float)",
+    "ranges": "half-open [start, end)",
+    "mapping": "every artifact carries segments: timeline range <- source_id + source range",
+    "precision": "TRIM / CUT / SILENCE_REMOVE / FILLER_REMOVE are sample-accurate (ffmpeg-skill/cut --accurate, precision reported per operation); every artifact duration is validated within 0.1s"
+  },
+  "loudness": {
+    "standard": "EBU R128 / ITU-R BS.1770 via ffmpeg loudnorm (two-pass, linear)",
+    "parameters": [
+      "target_lufs",
+      "true_peak_db",
+      "loudness_range_lu",
+      "tolerance_lufs",
+      "sample_rate",
+      "profile"
+    ],
+    "defaults": "none for target / true peak: the caller or profile decides",
+    "measurement_for_decisions": "media-analysis-skill (loudness kind); this skill only verifies its own output",
+    "profiles": {
+      "ebu_r128": {
+        "target_lufs": -23.0,
+        "true_peak_db": -1.0,
+        "scope": "international",
+        "description": "EBU R128 broadcast: -23 LUFS, -1 dBTP"
+      },
+      "atsc_a85": {
+        "target_lufs": -24.0,
+        "true_peak_db": -2.0,
+        "scope": "international",
+        "description": "ATSC A/85 broadcast: -24 LKFS, -2 dBTP"
+      },
+      "arib_tr_b32": {
+        "target_lufs": -24.0,
+        "true_peak_db": -1.0,
+        "scope": "regional:JP",
+        "description": "ARIB TR-B32 broadcast (Japan): -24 LKFS, -1 dBTP"
+      }
+    },
+    "default_profile": null,
+    "loudness_set": "LOUDNESS_SET writes several versions of one input in one run; each version must measure within tolerance_lufs of its target and at or under its true-peak ceiling (no slack), on the intermediate and on every delivered output; response key loudness_sets",
+    "loudnorm_mode": "per LOUDNESS_SET version (loudness_sets[].versions[].loudnorm_mode) and in every loudness measurement (measurements.loudness.loudnorm_mode): the mode loudnorm ran its second pass in, as ffmpeg-skill/loudness reports it (result.loudnorm_mode, same name and values): linear (one gain) or dynamic (loudnorm fell back to range compression: the input's range is above the LRA target, loudness_range_lu or ffmpeg-skill's default, or a linear gain would pass the true-peak ceiling); null when the located ffmpeg-skill does not report it, and in a plan"
+  },
+  "execution": {
+    "mode": "local",
+    "canonical_invocation": [
+      "audio-production",
+      "run",
+      "-",
+      "--json"
+    ],
+    "stdin": "audio-production/request@1",
+    "stdout": "exactly one audio-production/response@1 document",
+    "stderr": "diagnostics only",
+    "executables": [
+      "python3 <ffmpeg-skill>/scripts/{probe,audio,cut,loudness,join}.py (argv lists)"
+    ],
+    "executable_resolution": "ffmpeg-skill directory: --ffmpeg-skill, AUDIO_PRODUCTION_FFMPEG_SKILL_DIR, VIDEO_AGENT_FFMPEG_SKILL_DIR, ~/.claude/skills/ffmpeg-skill, ./vendor/ffmpeg-skill, ../ffmpeg-skill; ffmpeg/ffprobe: PATH lookup by ffmpeg-skill",
+    "shell": false,
+    "arbitrary_executables": false,
+    "arbitrary_filters": false,
+    "network": false,
+    "input_mutation": false,
+    "ai": false
+  },
+  "ffmpeg_skill": {
+    "contract_version": "1.0",
+    "compatibility": "capability detection: every tools_used tool declared audio_only with every flags_used flag in its input_schema; no version window",
+    "tools_used": [
+      "probe",
+      "audio",
+      "cut",
+      "loudness",
+      "join"
+    ],
+    "flags_used": {
+      "probe": [
+        "inputs"
+      ],
+      "audio": [
+        "input",
+        "output",
+        "gain",
+        "fade_in",
+        "fade_out",
+        "mono",
+        "stereo",
+        "downmix",
+        "denoise",
+        "denoise_strength",
+        "voice",
+        "music",
+        "music_volume",
+        "json",
+        "compress",
+        "comp_threshold",
+        "comp_ratio",
+        "comp_attack",
+        "comp_release",
+        "comp_makeup",
+        "comp_knee",
+        "limit",
+        "limit_ceiling",
+        "limit_attack",
+        "limit_release",
+        "gate",
+        "gate_threshold",
+        "gate_ratio",
+        "gate_attack",
+        "gate_release",
+        "gate_range",
+        "gate_knee",
+        "audio_stream"
+      ],
+      "cut": [
+        "input",
+        "output",
+        "start",
+        "end",
+        "segments",
+        "accurate",
+        "json"
+      ],
+      "loudness": [
+        "input",
+        "output",
+        "lufs",
+        "tp",
+        "lra",
+        "sample_rate",
+        "json"
+      ],
+      "join": [
+        "inputs",
+        "output",
+        "transition",
+        "duration",
+        "sample_rate",
+        "channels",
+        "json"
+      ]
+    },
+    "optional_flags_used": {
+      "audio": [
+        "overwrite",
+        "duck",
+        "duck_amount",
+        "duck_threshold",
+        "duck_attack",
+        "duck_release",
+        "replace"
+      ],
+      "cut": [
+        "declick_ms"
+      ],
+      "loudness": [
+        "measure_only"
+      ]
+    }
+  },
+  "request": {
+    "schema": "audio-production/request@1",
+    "id_pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+    "reference_pattern": "^(track|op):([A-Za-z0-9][A-Za-z0-9._-]{0,63})$",
+    "forbidden_fields": [
+      "af",
+      "args",
+      "argv",
+      "cmd",
+      "command",
+      "commands",
+      "cwd",
+      "env",
+      "exec",
+      "executable",
+      "ffmpeg",
+      "filter",
+      "filter_complex",
+      "filters",
+      "script",
+      "shell"
+    ],
+    "shape": {
+      "schema": "audio-production/request@1",
+      "project": {
+        "project_id": "id",
+        "sources": [
+          {
+            "source_id": "id",
+            "path": "file"
+          }
+        ],
+        "tracks": [
+          {
+            "track_id": "id",
+            "source_id": "id",
+            "label?": "str",
+            "channel_layout?": "mono|stereo|5.1|7.1",
+            "range?": {
+              "start": 0,
+              "end": 1
+            },
+            "gain_db?": 0
+          }
+        ],
+        "operations": [
+          {
+            "op_id": "id",
+            "type": "GAIN|...",
+            "inputs": [
+              "track:<id>|op:<id>"
+            ],
+            "parameters": {}
+          }
+        ],
+        "outputs": [
+          {
+            "output_id": "id",
+            "operation": "op:<id>|track:<id>",
+            "path": "file",
+            "format": "wav|flac|mp3|m4a|aac|ogg|opus",
+            "overwrite?": false,
+            "expect?": {
+              "sample_rate?": 48000,
+              "channels?": 2,
+              "channel_layout?": "stereo",
+              "duration?": 0,
+              "duration_tolerance?": 0.1
+            }
+          }
+        ]
+      },
+      "options?": {
+        "reuse_intermediates?": true,
+        "timeout?": 600
+      }
+    }
+  },
+  "response": {
+    "schema": "audio-production/response@1",
+    "success": {
+      "ok": true,
+      "status": "ok",
+      "dry_run": "bool",
+      "plan": "...",
+      "results": "[OperationResult]",
+      "outputs": "[output artifact + provenance]"
+    },
+    "failure": {
+      "ok": false,
+      "status": "error|cancelled",
+      "error": {
+        "code": "one of errors.codes",
+        "message": "str",
+        "retryable": "bool",
+        "details": {}
+      }
+    }
+  },
+  "provenance": {
+    "per_operation": [
+      "operation_id",
+      "type",
+      "tool",
+      "tool_versions",
+      "parameters",
+      "input_hashes",
+      "output_hash",
+      "segments",
+      "status",
+      "measurements",
+      "tool_commands_observed"
+    ],
+    "per_output": [
+      "skill",
+      "skill_version",
+      "tool",
+      "tool_versions",
+      "output_hash",
+      "operations (chain)",
+      "sources (sha256)"
+    ],
+    "identity": "sha256 over canonical JSON of {type, parameters, input identities, tool versions}; sources by file sha256; no timestamps, no UUIDs"
+  },
+  "cleanup": {
+    "cli_flag": "--cleanup",
+    "policies": [
+      "keep",
+      "intermediates"
+    ],
+    "default": "keep",
+    "scope": "regular files directly inside <workspace>/.audio-production/<project_id>/ after a fully successful run; never on failure, never outputs",
+    "response_key": "cleanup",
+    "note": "operator-level (CLI), deliberately not a request option: the request block is pinned by consumers"
+  },
+  "schema_versions": {
+    "contract": "1",
+    "request": "1",
+    "response": "1",
+    "doctor": "1"
+  },
+  "errors": {
+    "codes": [
+      "INVALID_REQUEST",
+      "INVALID_INPUT",
+      "PATH_NOT_ALLOWED",
+      "UNSUPPORTED_OPERATION",
+      "UNSUPPORTED_FORMAT",
+      "MISSING_INPUT",
+      "INVALID_TIME_RANGE",
+      "INVALID_CHANNEL_LAYOUT",
+      "INVALID_SAMPLE_RATE",
+      "DEPENDENCY_ERROR",
+      "TOOL_ERROR",
+      "OUTPUT_ERROR",
+      "VALIDATION_ERROR",
+      "CANCELLED",
+      "INTERNAL_ERROR"
+    ],
+    "exit_codes": {
+      "INVALID_REQUEST": 2,
+      "INVALID_INPUT": 3,
+      "PATH_NOT_ALLOWED": 4,
+      "UNSUPPORTED_OPERATION": 5,
+      "UNSUPPORTED_FORMAT": 6,
+      "MISSING_INPUT": 7,
+      "INVALID_TIME_RANGE": 8,
+      "INVALID_CHANNEL_LAYOUT": 9,
+      "INVALID_SAMPLE_RATE": 10,
+      "DEPENDENCY_ERROR": 11,
+      "TOOL_ERROR": 12,
+      "OUTPUT_ERROR": 13,
+      "VALIDATION_ERROR": 14,
+      "CANCELLED": 15,
+      "INTERNAL_ERROR": 16
+    },
+    "retryable": {
+      "INVALID_REQUEST": false,
+      "INVALID_INPUT": false,
+      "PATH_NOT_ALLOWED": false,
+      "UNSUPPORTED_OPERATION": false,
+      "UNSUPPORTED_FORMAT": false,
+      "MISSING_INPUT": false,
+      "INVALID_TIME_RANGE": false,
+      "INVALID_CHANNEL_LAYOUT": false,
+      "INVALID_SAMPLE_RATE": false,
+      "DEPENDENCY_ERROR": false,
+      "TOOL_ERROR": true,
+      "OUTPUT_ERROR": false,
+      "VALIDATION_ERROR": false,
+      "CANCELLED": true,
+      "INTERNAL_ERROR": false
+    },
+    "success_exit_code": 0
+  }
+}

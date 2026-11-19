@@ -81,8 +81,8 @@ LOUDNESS_VERSION_FIELDS: Dict[str, Dict[str, Any]] = {
     "sample_rate": {"type": _INT, "required": False, "enum": list(SAMPLE_RATES), "description": "output sample rate of this version (omit: keep the input's)"},
 }
 
-# MIX.duck: the bed input that ffmpeg-skill/audio --duck lowers under input 0 (sidechaincompress keyed by input 0).
-# Ranges are the ones ffmpeg-skill audio.py checks before ffmpeg runs (sidechaincompress's own limits). Only
+# MIX.duck: the bed input that ffmpeg-skill/audio --duck lowers under input 0 (a sidechain duck keyed by input 0).
+# Ranges are the ones ffmpeg-skill audio.py checks before ffmpeg runs. Only
 # amount_db is required; threshold / attack / release left out keep ffmpeg-skill's defaults (recorded in provenance
 # through the observed command) and need an ffmpeg-skill whose contract declares them (ADR-19).
 DUCK_FIELDS: Dict[str, Dict[str, Any]] = {

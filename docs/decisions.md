@@ -340,3 +340,15 @@
   - *Contract.* Additive: a new key, `loudness.loudnorm_mode`, outside the pinned blocks (`contract --check`:
     `additive`), and new response keys. No request field changed and no verification rule changed. A dynamic-mode
     version is still delivered when it measures within `tolerance_lufs` and at or under its ceiling.
+
+- **ADR-27 MIX duck is checked through ffmpeg-skill's `audio.duck` report, not through the filter it builds.**
+  - *What broke.* The integration test asserted that a ducked MIX's `tool_commands_observed` contained
+    `sidechaincompress`. ffmpeg-skill main (3.8.x on, #516, audit A134) builds the duck with `sidechaingate`, so the
+    `ffmpeg-skill main` cells failed although the bed was still lowered as asked. Which filter ffmpeg-skill uses is
+    its own implementation; its contract documents the `audio.duck` object (`amount_db`, threshold, ratio, attack,
+    release actually used).
+  - *Choice.* The executor records that object as `measurements.duck.engine_report` whenever the located
+    ffmpeg-skill's `--json` document carries `audio.duck` (capability detection, ADR-15: 0.12.2 has no `audio`
+    block and gets no key). The test checks the depth ffmpeg-skill reports against the one asked, and keeps the
+    band-level measurement as the evidence on every ffmpeg-skill. Nothing is refused that ran before.
+  - *Contract.* Additive: one new key inside `measurements`, outside the pinned blocks; no version bump is required.
