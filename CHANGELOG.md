@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.4.1 - 2026-11-19
+
+- ci: call Velisa's contract-diff on contract changes, one run per pull request (#41) (4dbc76e)
+
 ## v1.4.0 - 2026-11-19
 
 - feat: report loudnorm_mode (linear / dynamic) per LOUDNESS_SET version (#38) (fdf53d8)
