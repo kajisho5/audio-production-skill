@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.4.0 - 2026-11-19
+
+- feat: report loudnorm_mode (linear / dynamic) per LOUDNESS_SET version (#38) (fdf53d8)
+
 ## v1.3.4 - 2026-11-19
 
 - fix(mix): check the duck through ffmpeg-skill audio.duck report (ADR-27) (#40) (f7b279f)
