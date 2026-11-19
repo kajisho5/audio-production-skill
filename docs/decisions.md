@@ -311,7 +311,7 @@
   - *Default.* No lexicon is a default; `en` is now listed first in `filler_lexicons.presets`. Japanese-specific
     words are reachable only by naming them.
 
-- **ADR-26 MIX duck is checked through ffmpeg-skill's `audio.duck` report, not through the filter it builds.**
+- **ADR-27 MIX duck is checked through ffmpeg-skill's `audio.duck` report, not through the filter it builds.**
   - *What broke.* The integration test asserted that a ducked MIX's `tool_commands_observed` contained
     `sidechaincompress`. ffmpeg-skill main (3.8.x on, #516, audit A134) builds the duck with `sidechaingate`, so the
     `ffmpeg-skill main` cells failed although the bed was still lowered as asked. Which filter ffmpeg-skill uses is

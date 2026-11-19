@@ -599,7 +599,7 @@ def test_mix_ducks_the_bed_under_input_0(workspace, skill_dir):
             duck = r["measurements"]["duck"]
             assert duck["input"] == 1 and duck["ffmpeg_skill_flags"].startswith("--duck --duck-amount 24")
             # an ffmpeg-skill that reports the duck it built (`audio.duck`, its documented contract) must name the depth
-            # asked; which filter builds it is not part of that contract (ADR-26). The band levels below are the evidence
+            # asked; which filter builds it is not part of that contract (ADR-27). The band levels below are the evidence
             # that the bed was lowered, on every ffmpeg-skill.
             if "engine_report" in duck:
                 assert duck["engine_report"] and duck["engine_report"]["amount_db"] == 24, duck
