@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.4 - 2026-11-19
+
+- fix(mix): check the duck through ffmpeg-skill audio.duck report (ADR-27) (#40) (f7b279f)
+
 ## v1.3.3 - 2026-11-19
 
 - ci: commit the contract as contract/contract.json (#39) (5f47186)
