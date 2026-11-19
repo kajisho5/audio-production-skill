@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.3 - 2026-11-19
+
+- ci: commit the contract as contract/contract.json (#39) (5f47186)
+
 ## v1.3.2 - 2026-11-13
 
 - docs: link the loudnorm / ebur128 comparison, tick roadmap step 12 (#37) (73889a6)

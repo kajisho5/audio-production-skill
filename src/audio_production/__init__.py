@@ -6,7 +6,7 @@ does not decide what to do (video-production-agent) and never runs a shell or an
 
 SKILL_ID = "audio-production"
 PACKAGE_NAME = "audio-production-skill"
-VERSION = "1.3.2"
+VERSION = "1.3.3"
 
 CONTRACT_SCHEMA_VERSION = 1
 REQUEST_SCHEMA_VERSION = 1
