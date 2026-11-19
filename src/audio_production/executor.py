@@ -576,7 +576,7 @@ class Executor:
             return calls
         if node.type == "MIX":
             # pairwise fold through ffmpeg-skill/audio --music (main + one bed per call); intermediates next to the output.
-            # With duck, the ducked bed is folded first, keyed by input 0 alone (sidechaincompress inside that call);
+            # With duck, the ducked bed is folded first, keyed by input 0 alone (ffmpeg-skill's sidechain duck inside that call);
             # the other inputs are summed afterwards un-ducked (amix normalize=0, so the fold order does not change the sum)
             duck = p.get("duck")
             order = list(range(len(node.inputs)))
@@ -635,6 +635,10 @@ class Executor:
                         st.measurements["cut"]["declick_ms"] = run.data["declick_ms"]     # the fade ffmpeg-skill applied at each join
                 if tool == "loudness":
                     loudness_data = run.data
+                if tool == "audio" and "--duck" in args and isinstance(run.data.get("audio"), dict) and "duck" in run.data["audio"]:
+                    # the duck ffmpeg-skill says it applied (its documented `audio.duck` report, 1.13+): which sidechain
+                    # filter builds it is ffmpeg-skill's own business (sidechaincompress before A134, sidechaingate since)
+                    st.measurements["duck"]["engine_report"] = run.data["audio"]["duck"]
             st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources))
             if node.type == "STEM":
                 self._check_stem_length(st, states[node.inputs[0]], sources)
