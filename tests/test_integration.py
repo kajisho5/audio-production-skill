@@ -596,7 +596,13 @@ def test_mix_ducks_the_bed_under_input_0(workspace, skill_dir):
         (workspace / f"{name}.wav").write_bytes(outs[name])
         if name == "ducked":
             r = results(d)["op:m"]
-            assert r["measurements"]["duck"]["input"] == 1 and any("sidechaincompress" in c for c in r["tool_commands_observed"])
+            duck = r["measurements"]["duck"]
+            assert duck["input"] == 1 and duck["ffmpeg_skill_flags"].startswith("--duck --duck-amount 24")
+            # an ffmpeg-skill that reports the duck it built (`audio.duck`, its documented contract) must name the depth
+            # asked; which filter builds it is not part of that contract (ADR-26). The band levels below are the evidence
+            # that the bed was lowered, on every ffmpeg-skill.
+            if "engine_report" in duck:
+                assert duck["engine_report"] and duck["engine_report"]["amount_db"] == 24, duck
     plain_pre, plain_on = band_level_dbfs(workspace / "plain.wav", 0.3, 1.7), band_level_dbfs(workspace / "plain.wav", 2.5, 4.5)
     duck_pre, duck_on = band_level_dbfs(workspace / "ducked.wav", 0.3, 1.7), band_level_dbfs(workspace / "ducked.wav", 2.5, 4.5)
     assert abs(plain_on - plain_pre) < 1.5, (plain_pre, plain_on)          # without duck the bed is steady

@@ -113,6 +113,11 @@ From `scripts/audio.py` / `scripts/cut.py` and `_contract.py --json` at 0.12.2 (
   linear) and range-checks all four (amount 0..60, threshold −60..0, attack 0.01..2000, release 0.01..9000) before
   ffmpeg runs. `--duck` without `--music` is refused by audio.py; `--effects F` is a further `volume` + `amix
   normalize=0` that is never ducked — the same graph as one more `--music` fold (ADR-19).
+- Since ffmpeg-skill 3.8.x (#516, audit A134) the duck is built with `sidechaingate` (ratio 9000, `range` from
+  `--duck-amount` in dB) instead of `sidechaincompress`. The filter is not part of ffmpeg-skill's contract; what is
+  (docs/contract.md there, "Per-tool keys added in 1.13") is the `audio.duck` object of the `--json` document:
+  threshold (dB and linear), ratio, attack, release and `amount_db` actually used, or `null` without `--duck`.
+  0.12.2 has no `audio` block. The skill records that object as `measurements.duck.engine_report` (ADR-26).
 - Measured with the integration fixtures (key: 1 kHz at amplitude 0.5 only 2..5 s; bed: 440 Hz at 0.1), `amount_db`
   24 on both 0.12.2 and 2.22.4: the bed's 440 Hz band under the key drops by more than 6 dB against the un-ducked mix
   and is within 1.5 dB of it before the key.
