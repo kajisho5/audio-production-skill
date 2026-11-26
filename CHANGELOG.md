@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.5.0 - 2026-11-26
+
+- feat: AUTOMIX (gain-sharing mix of microphone tracks) and MIX_TRACKS (pan, language-tagged tracks) (#50) (b10e206)
+- ci: a contract:breaking pull request on 1.x needs the major label (Velisa ADR-031 section 5) (#49) (2efe60b)
+- ci: release gate leaves contract:* labels out of the count (#48) (276b63e)
+- ci: Velisa's reusable changelog-check/release-guard; dependencies PRs release a patch (D36, D37) (#45) (4689acc)
+
 ## v1.4.3 - 2026-11-19
 
 - ci(release): test the release commit before pushing; no release for chore/ci/docs-only changes (#44) (6ce8aa8)
