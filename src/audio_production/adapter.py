@@ -17,7 +17,10 @@ Which ffmpeg-skill tools are used, and for what (docs/ffmpeg-skill.md):
             since ffmpeg-skill 0.9.1, to pick which audio stream of their one input to process; default 0; VOICE_CLEANUP's
             level is passed as `--voice <level>` when the contract declares the levels, else as the bare `--voice`), MIX
             (--music, always stream 0 of each already-resolved input; MIX.duck adds --duck --duck-amount [--duck-threshold
-            --duck-attack --duck-release] to the call that folds the ducked bed), format conversion / extraction
+            --duck-attack --duck-release] to the call that folds the ducked bed), format conversion / extraction; AUTOMIX's
+            and a panned MIX_TRACKS's inputs written as 16-bit PCM (plain `-o x.wav`, --mono for a 2-channel AUTOMIX input) for
+            the in-process sample arithmetic of pcm.py; a MIX_TRACKS with languages as one track per language (--track,
+            --track-name, --track-lang)
   cut       TRIM (--start/--end), CUT / SILENCE_REMOVE / FILLER_REMOVE (--segments = kept ranges), always --accurate
             (sample precision); FILLER_REMOVE.declick_ms as --declick-ms
   loudness  NORMALIZE (-I/--tp/--lra/--sample-rate); verification reads the `result` field of that same call's
@@ -76,10 +79,13 @@ FLAGS_USED: Dict[str, Tuple[str, ...]] = {
 #                          threshold / attack / release); used only when the request sets them, refused if undeclared.
 #   audio.replace          STEMS: a stem without input 0 replaces input 0's audio with its first member, padded /
 #                          trimmed to input 0's duration (every release this skill runs declares it; refused if not).
+#   audio.track, audio.track_name, audio.track_lang
+#                          a MIX_TRACKS with languages written as one track per language (ffmpeg-skill 4.x, #420); a language
+#                          mix alone needs nothing. Absent: an output of the track set is refused at planning (ADR-30).
 #   cut.declick_ms         FILLER_REMOVE.declick_ms (fade at each --segments join); a value above 0 is refused at
 #                          planning when undeclared, 0 or omitted needs nothing (ADR-18).
 OPTIONAL_FLAGS_USED: Dict[str, Tuple[str, ...]] = {
-    "audio": ("overwrite", "duck", "duck_amount", "duck_threshold", "duck_attack", "duck_release", "replace"),
+    "audio": ("overwrite", "duck", "duck_amount", "duck_threshold", "duck_attack", "duck_release", "replace", "track", "track_name", "track_lang"),
     "cut": ("declick_ms",),
     "loudness": ("measure_only",),
 }

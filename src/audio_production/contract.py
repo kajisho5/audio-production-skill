@@ -8,9 +8,10 @@ from typing import Any, Dict, List
 from . import CONTRACT_SCHEMA_VERSION, DOCTOR_SCHEMA_VERSION, PACKAGE_NAME, REQUEST_SCHEMA_VERSION, RESPONSE_SCHEMA_VERSION, SKILL_ID, VERSION
 from .adapter import FLAGS_USED, KNOWN_CONTRACT_VERSIONS, OPTIONAL_FLAGS_USED, SUPPORTED_CONTRACT_VERSION, TOOLS_USED
 from .errors import ERROR_CODES, ERROR_TABLE, EXIT_CODES
-from .executor import CLEANUP_POLICIES, DURATION_TOLERANCE, TOOL_FOR, WORK_DIR_NAME
+from .executor import CLEANUP_POLICIES, DURATION_TOLERANCE, TOOL_FOR, TRACK_FLAGS, WORK_DIR_NAME
+from .pcm import HOP_SECONDS
 from .fillers import LEXICON_PRESETS, MAX_RUN_TOKENS, OPT_IN_LISTS, RUN_MAX_GAP
-from .model import (CHANNEL_LAYOUTS, DUCK_FIELDS, LOUDNESS_PROFILES, LOUDNESS_VERSION_FIELDS, MAX_LOUDNESS_VERSIONS, MAX_STEMS, STEM_ROLES, DYNAMICS_STAGES, FORBIDDEN_KEYS, MAX_LEXICON_WORDS, MAX_WORDS, TRANSCRIPT_SCHEMA, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
+from .model import (AUTOMIX_CHANNEL_FIELDS, LANGUAGE_FIELDS, MAX_LANGUAGES, TRACK_SET_FORMATS, CHANNEL_LAYOUTS, DUCK_FIELDS, LOUDNESS_PROFILES, LOUDNESS_VERSION_FIELDS, MAX_LOUDNESS_VERSIONS, MAX_STEMS, STEM_ROLES, DYNAMICS_STAGES, FORBIDDEN_KEYS, MAX_LEXICON_WORDS, MAX_WORDS, TRANSCRIPT_SCHEMA, ID_RE, INTERMEDIATE_FORMAT, MAX_CONCAT_INPUTS, MAX_MIX_INPUTS, OPERATION_TYPES,
                     OUTPUT_FORMATS, REF_RE, REQUEST_SCHEMA_ID, SAMPLE_RATES, UNSUPPORTED_OPERATIONS)
 
 CONTRACT_SCHEMA_ID = f"{SKILL_ID}/contract@{CONTRACT_SCHEMA_VERSION}"
@@ -28,6 +29,7 @@ CAPABILITY_IDS: Dict[str, str] = {
     "MONO": "audio.mono", "STEREO": "audio.stereo", "DOWNMIX": "audio.downmix", "NOISE_REDUCTION": "audio.noise_reduction",
     "DYNAMICS": "audio.dynamics", "CONCAT": "audio.concat", "VOICE_CLEANUP": "audio.voice_cleanup",
     "FILLER_REMOVE": "audio.filler_remove", "LOUDNESS_SET": "audio.loudness_set", "STEMS": "audio.stems",
+    "AUTOMIX": "audio.automix", "MIX_TRACKS": "audio.mix_tracks",
 }
 
 
@@ -47,7 +49,7 @@ def dependencies() -> List[Dict[str, Any]]:
              "tools": [f"ffmpeg-skill/{t}" for t in TOOLS_USED]}]
 
 
-def _param_schema(ps: Dict[str, Any]) -> Dict[str, Any]:
+def _param_schema(ps: Dict[str, Any], op_type: str = "") -> Dict[str, Any]:
     out = {k: v for k, v in ps.items() if k in ("type", "required", "min", "max", "enum", "default", "description", "max_length")}
     if ps["type"] == "ranges":
         out["type"] = "array"
@@ -59,6 +61,18 @@ def _param_schema(ps: Dict[str, Any]) -> Dict[str, Any]:
     if ps["type"] == "levels":
         out["type"] = "array"
         out["items"] = {"type": "object", "properties": {"gain_db": {"type": "number", "min": -60, "max": 60}, "mute": {"type": "boolean"}}, "additionalProperties": False}
+        if op_type == "MIX_TRACKS":
+            out["items"]["properties"]["pan"] = {"type": "number", "min": -1, "max": 1}
+    if ps["type"] == "automix_channels":
+        out["type"] = "array"
+        out["items"] = {"type": "object", "properties": {k: dict(v) for k, v in AUTOMIX_CHANNEL_FIELDS.items()}, "additionalProperties": False}
+        out["rule"] = "one entry per input; at least one not pinned"
+    if ps["type"] == "languages":
+        out["type"] = "array"
+        out["min_items"], out["max_items"] = 1, MAX_LANGUAGES
+        out["items"] = {"type": "object", "properties": {k: dict(v) for k, v in LANGUAGE_FIELDS.items()},
+                        "required": [k for k, v in LANGUAGE_FIELDS.items() if v["required"]], "additionalProperties": False}
+        out["rule"] = "an input index (>= 1) in at most one language; input 0 and every unnamed input are the floor of every language"
     if ps["type"] == "duck":
         out["type"] = "object"
         out["properties"] = {k: dict(v) for k, v in DUCK_FIELDS.items()}
@@ -99,9 +113,9 @@ def operation_specs() -> List[Dict[str, Any]]:
     for typ, spec in OPERATION_TYPES.items():
         tool, extra = TOOL_FOR[typ]
         out.append({"type": typ, "description": spec["description"], "inputs": {"min": spec["inputs"][0], "max": spec["inputs"][1]},
-                    "parameters": {k: _param_schema(v) for k, v in spec["parameters"].items()},
+                    "parameters": {k: _param_schema(v, typ) for k, v in spec["parameters"].items()},
                     "tool": f"ffmpeg-skill/{tool}", "required_capabilities": ["ffmpeg-skill", "ffmpeg", "ffprobe", "encoder:pcm_s16le", *extra],
-                    "keeps_timeline": typ not in ("TRIM", "CUT", "SILENCE_REMOVE", "FILLER_REMOVE", "MIX", "STEMS", "CONCAT"), "deterministic": "content_equivalent"})
+                    "keeps_timeline": typ not in ("TRIM", "CUT", "SILENCE_REMOVE", "FILLER_REMOVE", "MIX", "STEMS", "CONCAT", "AUTOMIX", "MIX_TRACKS"), "deterministic": "content_equivalent"})
     return out
 
 
@@ -169,6 +183,18 @@ def skill_contract() -> Dict[str, Any]:
         "provenance": {"per_operation": ["operation_id", "type", "tool", "tool_versions", "parameters", "input_hashes", "output_hash", "segments", "status", "measurements", "tool_commands_observed"],
                        "per_output": ["skill", "skill_version", "tool", "tool_versions", "output_hash", "operations (chain)", "sources (sha256)"],
                        "identity": "sha256 over canonical JSON of {type, parameters, input identities, tool versions}; sources by file sha256; no timestamps, no UUIDs"},
+        "in_process": {"operations": ["AUTOMIX", "MIX_TRACKS (levels[].pan)"],
+                       "what": "sample arithmetic in this process (Python standard library) on 16-bit PCM WAV that ffmpeg-skill/audio wrote first: AUTOMIX's "
+                               "gain sharing and MIX_TRACKS's constant-power pan. No process is started, no ffmpeg runs, nothing outside the work directory is written",
+                       "why": "ffmpeg-skill has no gain envelope and no pan flag", "automix_hop_seconds": HOP_SECONDS,
+                       "automix_rule": "gain_i = level_i - power sum of every shared input's level (dB): shared gains sum to 0 dB (power); levels slew at most "
+                                       "max_gain_rate_db_per_s / 2, so no gain moves faster than max_gain_rate_db_per_s; measurements.automix reports the measured rate, "
+                                       "the shared gain sum, each input's open_ratio (share above -6 dB) and mean share, the held ratio and clipped samples",
+                       "pan_law": "constant power: left cos((pan + 1) pi / 4), right sin((pan + 1) pi / 4); 0 = -3.01 dB per side"},
+        "language_tracks": {"parameter": "MIX_TRACKS.languages", "part_reference": "op:<op_id>.<language_id> (one language mix, any format)",
+                            "set_reference": "op:<op_id> (one audio track per language, in order, each named and tagged)", "set_formats": list(TRACK_SET_FORMATS),
+                            "ffmpeg_skill_flags": [f"audio.{f}" for f in TRACK_FLAGS], "response_key": "language_tracks",
+                            "per_output": "outputs[].tracks: language_id, language, title, index, duration as ffmpeg-skill reported writing them"},
         "cleanup": {"cli_flag": "--cleanup", "policies": list(CLEANUP_POLICIES), "default": "keep",
                     "scope": f"regular files directly inside <workspace>/{WORK_DIR_NAME}/<project_id>/ after a fully successful run; never on failure, never outputs",
                     "response_key": "cleanup", "note": "operator-level (CLI), deliberately not a request option: the request block is pinned by consumers"},

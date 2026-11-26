@@ -7,6 +7,9 @@ Node kinds:
   stem node    "op:<id>.<stem_id>"  one stem of a STEMS operation (type STEM, implicit; reads every input of it)
   version node "op:<id>.<version_id>"  one version of a LOUDNESS_SET (type LOUDNESS_VERSION, implicit); the set
                              itself has no node of its own
+  language node "op:<id>.<language_id>"  one language mix of a MIX_TRACKS with languages (type LANGUAGE_MIX, implicit; reads
+                             every input of it; present when the set or that language is written or read); "op:<id>" is then a LANGUAGE_TRACKS node (implicit) reading the
+                             language nodes, present only when an output references it
 Every node has: node_id, type, inputs (node ids), parameters, dependencies (transitive closure is not stored), and
 an identity: sha256 of canonical {type, parameters, inputs' identities, tool version, source fingerprints}, computed
 by the executor once source fingerprints are known (graph.identity()). Nothing here depends on time or randomness."""
@@ -17,7 +20,7 @@ from typing import Any, Dict, List, Optional
 
 from .canonical import stable_hash
 from .errors import AudioError
-from .model import AudioProject, AudioTrack
+from .model import AudioProject, AudioTrack, language_members
 
 
 @dataclass
@@ -87,6 +90,26 @@ class OperationGraph:
                     if "role" in stem:
                         params["role"] = stem["role"]
                     self._add(Node(f"{nid}.{stem['stem_id']}", "STEM", list(inputs), params, implicit=True))
+                continue
+            if op.type == "MIX_TRACKS" and "languages" in op.parameters:
+                # one MIX per language ("op:<op_id>.<language_id>": the floor plus that language's inputs) and, when an
+                # output writes the set, one node putting them into one file as one track each
+                langs = []
+                wanted = {o.operation for o in p.outputs} | {ref for other in p.operations for ref in other.inputs}
+                whole = nid in wanted
+                for lang in op.parameters["languages"]:
+                    if not whole and f"{nid}.{lang['language_id']}" not in wanted:
+                        continue          # a language nothing writes or reads (only another language mix is delivered)
+                    members = language_members(op.parameters, len(inputs), lang)
+                    params = {"mix_op": op.op_id, "language_id": lang["language_id"], "language": lang["language"], "members": members,
+                              "levels": [op.parameters["levels"][k] for k in members]}
+                    if "title" in lang:
+                        params["title"] = lang["title"]
+                    self._add(Node(f"{nid}.{lang['language_id']}", "LANGUAGE_MIX", list(inputs), params, implicit=True))
+                    langs.append(f"{nid}.{lang['language_id']}")
+                if whole:
+                    tracks = [{k: lang[k] for k in ("language_id", "language", "title") if k in lang} for lang in op.parameters["languages"]]
+                    self._add(Node(nid, "LANGUAGE_TRACKS", langs, {"mix_op": op.op_id, "tracks": tracks}, implicit=True))
                 continue
             self._add(Node(nid, op.type, inputs, dict(op.parameters)))
         for node in self.nodes.values():

@@ -78,6 +78,13 @@ operation. `op_id` is a label, not part of the identity. `plan_id` hashes all id
    of a LOUDNESS_SET version is measured again (`loudness --measure-only`) and summarised in `loudness_sets`, with the `loudnorm_mode` ffmpeg-skill reported (ADR-26).
    A STEMS operation expands into one `STEM` node per stem (`op:<op_id>.<stem_id>`) that reads every input (input 0
    sets the programme's length); its sample count is checked against input 0's and summarised in `stems` (ADR-24).
+   An AUTOMIX node writes every input as 16-bit mono PCM (`ffmpeg-skill/audio`, `.amN.wav` sidecars) and computes the
+   gain-sharing mix in this process (`pcm.py`, ADR-29). A MIX_TRACKS with languages expands into one `LANGUAGE_MIX`
+   node per language (`op:<op_id>.<language_id>`, a MIX of the floor and that language's inputs) and, when an output
+   references the set, one `LANGUAGE_TRACKS` node (`op:<op_id>`, a Matroska PCM intermediate written by
+   `ffmpeg-skill/audio --track`); its outputs are written again from the language mixes, straight into `mkv` or `mp4`,
+   and every track's language and name are checked against ffmpeg-skill's `tracks` report (ADR-30). A pan writes each
+   1-channel input as PCM (`.pancN.wav`) and places it in stereo here (`.panN.wav`) before the fold.
 7. Return one response document: `ok`, `status`, `plan`, `results`, `outputs` (with provenance), `tool_runs`,
    `error?`. On the first failure the remaining nodes are `skipped`; on SIGINT / SIGTERM the running tool's process
    group is killed and the status is `cancelled`.

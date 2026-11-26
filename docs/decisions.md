@@ -365,3 +365,53 @@
     This is imagemagick-skill's rule. release-drafter's `default` accepts only major, minor or patch, so the gate runs
     first, and chore / maintenance / ci / docs no longer map to a patch.
   - *Contract.* Unchanged.
+
+- **ADR-29 AUTOMIX: a gain-sharing mix of microphone inputs, computed in this process.**
+  - *Need.* A discussion recorded one microphone per person: the microphones that are not carrying the sound add
+    their own noise and the room twice over (bleed) unless they are turned down while someone else talks.
+  - *Engine check.* ffmpeg-skill (4.8.2, read 2026-11-26) has no time-varying gain: `audio.py --duck` lowers one bed
+    keyed by one main track, `--gate` gates one track on its own level, `--music` sums at fixed levels. None shares
+    one gain budget across N inputs. The only ways through ffmpeg-skill would be cutting every input into short pieces
+    at fixed gains (thousands of `cut` / `join` calls, with steps at every joint), or asking ffmpeg-skill for a new tool.
+  - *Choice.* Each input is written as 16-bit mono PCM by `ffmpeg-skill/audio` (`--mono` for a 2-channel input), and
+    `pcm.py` computes the mix with the Python standard library (no new dependency, no process, no ffmpeg of its own).
+    The rule: an input's gain is its level minus the power sum of every shared input's level, in dB, so the shared
+    gains always sum to 0 dB (power). One input carrying the sound is at 0 dB and the others are as far down as their
+    level is below it; two equal talkers are at -3 dB each; in a pause N inputs are at -10*log10(N) each and the mix
+    keeps the noise of one input. The number-of-open-inputs attenuation is the rule itself. Levels are mean squares
+    over 5 ms hops, smoothed with `window_ms`, and slew at most half `max_gain_rate_db_per_s`, so no gain moves faster
+    than the stated rate (the power sum moves no faster than the fastest level). `pinned` inputs stay at `gain_db`;
+    `weight_db` scales a noisy input's level; `hold_below_dbfs` freezes the levels while everything is quiet, so the
+    last open input stays open. Both `window_ms` and `max_gain_rate_db_per_s` are required: no production default.
+  - *Measured* (tests/test_automix_languages.py, three 12 s microphones, bleed -15.4 dB, self-noise -53 dBFS; gains read
+    from each microphone's own marker tone in the mix): the talking microphone -0.2..-0.3 dB, the two others -15.4..-16.0
+    dB; shared gains summed -0.06..+0.04 dB; pauses -4.9 dB each (-10*log10 3 = -4.77), the mix's noise that of one
+    microphone; measured maximum gain rate 268 dB/s against 400 stated. 12 s of three inputs take 0.5 s.
+  - *Contract.* Additive: one operation (`AUTOMIX`, capability `audio.automix`) and the `in_process` key.
+    `si contract-diff`: additive, minor.
+
+- **ADR-30 MIX_TRACKS: a pan per input and one language-tagged track per language.**
+  - *Need.* Simultaneous interpretation (the floor sound with a Japanese and an English interpreter) or a dub beside
+    the original sound, delivered as one file whose tracks a player can choose by language; and placing mono inputs
+    in a stereo mix.
+  - *Engine check.* ffmpeg-skill 4.x `audio.py --track/--track-name/--track-lang` (#420) writes one audio stream per
+    file, named and tagged, into `.mkv` (PCM, as `pcm_s24le`), `.mp4` (AAC) or `.mov`. There is no pan flag, so a pan
+    is computed in this process (`pcm.pan_mono`, constant power: 0 is -3.01 dB per side, as ffmpeg-skill's `--stereo`
+    of a mono track) on 16-bit PCM that `audio.py -o x.wav` wrote.
+  - *Why a new operation and not MIX parameters.* `si contract-diff` compares the `operations` array item by item, and
+    its items have no id key, so any change to MIX's entry (a new parameter, even a description) reads as the entry
+    removed and a new one added: breaking, which on 1.x needs a major release. MIX_TRACKS is the same fold with the
+    same levels and duration, plus `levels[].pan` and `languages`; MIX's entry is byte for byte what it was.
+  - *Choice.* `languages: [{language_id, language (ISO 639-2), title?, inputs}]`: the floor is input 0 and every input
+    no language names; each language mix is the floor plus that language's inputs (`op:<op_id>.<language_id>`, any
+    format). An output of `op:<op_id>` itself writes every language as one track, in order, and only to `mkv` / `mp4`;
+    these two formats are refused anywhere else. The track tags ffmpeg-skill reports (`tracks`) are checked against
+    the languages asked. Without the three `--track` flags in the located contract the set is refused at planning;
+    a language mix alone still runs there. No duck in MIX_TRACKS.
+  - *Measured* (tests/test_automix_languages.py): floor 1 kHz at -12 dB, Japanese interpreter 440 Hz, English 220 Hz:
+    two tracks tagged `jpn` / `eng` with their names, each with its interpreter 12.0 dB above the floor and the other
+    language's interpreter more than 40 dB further down, in `mkv` (pcm_s24le) and `mp4` (AAC). Pan -1 / 1 / 0: the
+    left input at 0.0 dB on the left and more than 30 dB down on the right, the centre input -3.0 dB on both sides.
+  - *Contract.* Additive: one operation (`MIX_TRACKS`, capability `audio.mix_tracks`), output formats `mkv` / `mp4`,
+    three optional `audio` flags, the `language_tracks` key and response key. `si contract-diff`: additive, minor.
+

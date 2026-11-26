@@ -25,6 +25,7 @@ from .errors import AudioError
 from .fillers import effective_lexicon, match_fillers, opt_in_hits, removal_ranges
 from .graph import Node, OperationGraph
 from .model import CHANNEL_LAYOUTS, INTERMEDIATE_FORMAT, OUTPUT_FORMATS, AudioRequest, TimeRange, parse_request
+from . import pcm
 from .security import PathPolicy
 from .timeline import AudioSegment, apply_silence_rules, base_segments, complement, concat, cut, fade_ranges, mix, total_duration, trim
 
@@ -66,8 +67,14 @@ TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
     "STEMS": ("audio", ["filter:amix"]),
     "STEM": ("audio", ["filter:amix"]),                       # graph node of one STEMS stem
     "CONCAT": ("join", ["filter:acrossfade"]),
+    "AUTOMIX": ("audio", []),                                 # inputs written as 16-bit PCM by ffmpeg-skill/audio, then pcm.automix here
+    "MIX_TRACKS": ("audio", ["filter:amix"]),
+    "LANGUAGE_MIX": ("audio", ["filter:amix"]),               # graph node of one language mix of a MIX_TRACKS with languages
+    "LANGUAGE_TRACKS": ("audio", []),                         # graph node of a MIX_TRACKS with languages: one track per language (--track)
     "EXPORT": ("audio", []),
 }
+TRACK_FLAGS = ("track", "track_name", "track_lang")           # ffmpeg-skill/audio flags a track set needs (4.x, #420)
+TRACK_SET_SUFFIX = ".mkv"                                     # intermediate of a track set: Matroska, PCM tracks
 
 
 @dataclass
@@ -207,6 +214,8 @@ class Executor:
                 body0["loudness_sets"] = self.loudness_sets(project, [])
             if any(o.type == "STEMS" for o in project.operations):
                 body0["stems"] = self.stems_summary(project, [])
+            if any(o.type == "MIX_TRACKS" and "languages" in o.parameters for o in project.operations):
+                body0["language_tracks"] = self.language_tracks_summary(project, [])
             return self._envelope(True, "ok", body0)
 
         # execute
@@ -257,6 +266,8 @@ class Executor:
             body["loudness_sets"] = self.loudness_sets(project, out_results)
         if any(o.type == "STEMS" for o in project.operations):
             body["stems"] = self.stems_summary(project, out_results)
+        if any(o.type == "MIX_TRACKS" and "languages" in o.parameters for o in project.operations):
+            body["language_tracks"] = self.language_tracks_summary(project, out_results)
         if failure is not None:
             body["error"] = failure.to_dict()
             body["cleanup"] = {"policy": self.cleanup, "applied": False, "reason": "run did not succeed; intermediates are kept for diagnosis and reuse"}
@@ -338,10 +349,38 @@ class Executor:
         elif node.type in ("FADE_IN", "FADE_OUT"):
             fade_ranges(ins[0].segments, p["duration"] if node.type == "FADE_IN" else None, p["duration"] if node.type == "FADE_OUT" else None)
             st.segments = list(ins[0].segments)
-        elif node.type == "MIX":
+        elif node.type in ("MIX", "MIX_TRACKS", "LANGUAGE_MIX"):
             st.segments = mix([i.segments for i in ins])
             if all(lv["mute"] for lv in p["levels"]):
                 raise AudioError("INVALID_REQUEST", f"{where}: every MIX input is muted", {"node_id": node.node_id})
+            if "duck" in p:
+                # refused here, at planning (dry run included), when the located ffmpeg-skill cannot duck as asked
+                st.measurements["duck"] = {**p["duck"], "key_input": 0, "ffmpeg_skill_flags": " ".join(self._duck_flags(p["duck"], where))}
+            members = p["members"] if node.type == "LANGUAGE_MIX" else list(range(len(node.inputs)))
+            if any("pan" in lv for lv in p["levels"]):
+                for k, lv in zip(members, p["levels"]):
+                    ch = self._expected_channels(states, ins[k], sources)
+                    if "pan" in lv and ch != 1:
+                        raise AudioError("INVALID_CHANNEL_LAYOUT", f"{where}: input {k} has {ch} channels; pan places a 1-channel input (make it MONO first)",
+                                         {"input": k, "channels": ch, "reason": "pan_needs_mono"})
+                    if ch not in (1, 2) and not lv["mute"]:
+                        raise AudioError("INVALID_CHANNEL_LAYOUT", f"{where}: a panned mix is stereo; input {k} has {ch} channels (DOWNMIX it first)",
+                                         {"input": k, "channels": ch, "reason": "panned_mix_is_stereo"})
+                st.measurements["pan"] = [{"input": k, "pan": lv.get("pan", 0.0) if self._expected_channels(states, ins[k], sources) == 1 else None}
+                                          for k, lv in zip(members, p["levels"]) if not lv["mute"]]
+            if node.type == "LANGUAGE_MIX":
+                st.measurements["language"] = {"language_id": p["language_id"], "language": p["language"], "title": p.get("title"),
+                                               "members": [node.inputs[k] for k in members]}
+        elif node.type == "AUTOMIX":
+            st.segments = mix([i.segments for i in ins])
+            for k, i in enumerate(ins):
+                ch = self._expected_channels(states, i, sources)
+                if ch not in (1, 2):
+                    raise AudioError("INVALID_CHANNEL_LAYOUT", f"{where}: AUTOMIX input {k} has {ch} channels; it takes one microphone per input (1 or 2 channels)",
+                                     {"input": k, "channels": ch})
+        elif node.type == "LANGUAGE_TRACKS":
+            self._require_flags("audio", TRACK_FLAGS, where, "MIX_TRACKS languages (one track per language)")
+            st.segments = list(ins[0].segments)
             if "duck" in p:
                 # refused here, at planning (dry run included), when the located ffmpeg-skill cannot duck as asked
                 st.measurements["duck"] = {**p["duck"], "key_input": 0, "ffmpeg_skill_flags": " ".join(self._duck_flags(p["duck"], where))}
@@ -445,8 +484,12 @@ class Executor:
         node = st.node
         if node.type == "SOURCE_TRACK":
             return int(sources[node.track.source_id]["channels"])  # type: ignore[union-attr]
-        if node.type in ("MONO",):
+        if node.type in ("MONO", "AUTOMIX"):
             return 1
+        if node.type in ("MIX_TRACKS", "LANGUAGE_MIX") and any("pan" in lv for lv in node.parameters["levels"]):
+            return 2
+        if node.type == "LANGUAGE_TRACKS":
+            return self._expected_channels(states, states[node.inputs[0]], sources)
         if node.type in ("STEREO", "DOWNMIX"):
             return 2
         if node.type == "CONCAT":
@@ -473,6 +516,8 @@ class Executor:
                 "intermediate_format": INTERMEDIATE_FORMAT, "duration_tolerance": DURATION_TOLERANCE}
 
     def _intermediate_path(self, work_dir: Path, st: NodeState) -> Path:
+        if st.node.type == "LANGUAGE_TRACKS":
+            return work_dir / f"{st.identity[:16]}{TRACK_SET_SUFFIX}"
         return work_dir / f"{st.identity[:16]}.{INTERMEDIATE_FORMAT}"
 
     # ---- execution
@@ -480,7 +525,7 @@ class Executor:
     def sidecars(out_path: Path) -> List[Path]:
         """Temporary files a node may create next to its intermediate (decoded copy, MIX fold steps)."""
         base = str(out_path)[:-4]
-        return [Path(f"{base}.mix{k}.wav") for k in range(1, 8)]
+        return [Path(f"{base}.{kind}{k}.wav") for kind in ("mix", "am", "panc", "pan") for k in range(0, 8)]
 
     def _argv(self, st: NodeState, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], out_path: Path) -> List[Tuple[str, List[str]]]:
         """One or more ffmpeg-skill invocations (tool, argv without the script and --json) for this node. Every value
@@ -575,31 +620,91 @@ class Executor:
                 calls.append(("audio", args + ["-o", target]))
                 main = target
             return calls
-        if node.type == "MIX":
-            # pairwise fold through ffmpeg-skill/audio --music (main + one bed per call); intermediates next to the output.
-            # With duck, the ducked bed is folded first, keyed by input 0 alone (ffmpeg-skill's sidechain duck inside that call);
-            # the other inputs are summed afterwards un-ducked (amix normalize=0, so the fold order does not change the sum)
-            duck = p.get("duck")
-            order = list(range(len(node.inputs)))
-            if duck:
-                order.remove(duck["input"])
-                order.insert(1, duck["input"])
-            live = [(self._artifact_path(states[node.inputs[i]], sources), p["levels"][i]["gain_db"]) for i in order if not p["levels"][i]["mute"]]
+        if node.type in ("MIX", "MIX_TRACKS", "LANGUAGE_MIX"):
+            members = p["members"] if node.type == "LANGUAGE_MIX" else list(range(len(node.inputs)))
+            return self._mix_calls(states, sources, node, members, p["levels"], p.get("duck"), o)
+        if node.type == "AUTOMIX":
+            # every input written as 16-bit PCM WAV, one channel (ffmpeg-skill/audio, --mono for a 2-channel one), then
+            # the gain-sharing mix computed here (pcm.automix): ffmpeg-skill has no gain envelope (ADR-29)
             calls = []
-            main_path, main_gain = live[0]
-            if len(live) == 1:
-                return [("audio", [main_path, "--gain", fmt_db(main_gain), "-o", o])]
-            for k, (bed, bed_gain) in enumerate(live[1:], start=1):
-                target = o if k == len(live) - 1 else f"{o[:-4]}.mix{k}.wav"
-                args = [main_path, "--music", bed, "--music-volume", fmt_db(bed_gain)]
-                if k == 1 and duck:
-                    args += self._duck_flags(duck, f"operation {node.node_id}")
-                if k == 1 and main_gain:
-                    args += ["--gain", fmt_db(main_gain)]
-                calls.append(("audio", args + ["-o", target]))
-                main_path = target
+            for k, i in enumerate(node.inputs):
+                side = f"{o[:-4]}.am{k}.wav"
+                ch = self._expected_channels(states, states[i], sources)
+                calls.append(("audio", [self._artifact_path(states[i], sources), *(["--mono"] if ch == 2 else []), "-o", side]))
+            calls.append(("pcm", ["automix", o, *[f"{o[:-4]}.am{k}.wav" for k in range(len(node.inputs))]]))
             return calls
+        if node.type == "LANGUAGE_TRACKS":
+            return [("audio", self._track_args(states, sources, node, o))]
         raise AudioError("INTERNAL_ERROR", f"no argv builder for {node.type}")
+
+    def _mix_calls(self, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], node: Node, members: List[int], levels: List[Dict[str, Any]],
+                   duck: Optional[Dict[str, Any]], o: str) -> List[Tuple[str, List[str]]]:
+        """MIX, MIX_TRACKS and one language mix: pairwise fold through ffmpeg-skill/audio --music (main + one bed per call);
+        intermediates next to the output. With duck, the ducked bed is folded first, keyed by input 0 alone
+        (ffmpeg-skill's sidechain duck inside that call); the other inputs are summed afterwards un-ducked (amix
+        normalize=0, so the fold order does not change the sum). With a pan, every 1-channel input is first written
+        as 16-bit PCM (ffmpeg-skill/audio) and placed in stereo here (pcm.pan_mono, constant power; ADR-30)."""
+        calls: List[Tuple[str, List[str]]] = []
+        order = list(range(len(members)))
+        if duck:
+            order.remove(duck["input"])
+            order.insert(1, duck["input"])
+        panned = any("pan" in lv for lv in levels)
+        live: List[Tuple[str, float]] = []
+        for j in order:
+            lv = levels[j]
+            if lv["mute"]:
+                continue
+            st_in = states[node.inputs[members[j]]]
+            path = self._artifact_path(st_in, sources)
+            if panned and self._expected_channels(states, st_in, sources) == 1:
+                conformed, placed = f"{o[:-4]}.panc{j}.wav", f"{o[:-4]}.pan{j}.wav"
+                calls += [("audio", [path, "-o", conformed]), ("pcm", ["pan", placed, conformed, repr(float(lv.get("pan", 0.0)))])]
+                path = placed
+            live.append((path, lv["gain_db"]))
+        main_path, main_gain = live[0]
+        if len(live) == 1:
+            return calls + [("audio", [main_path, "--gain", fmt_db(main_gain), "-o", o])]
+        for k, (bed, bed_gain) in enumerate(live[1:], start=1):
+            target = o if k == len(live) - 1 else f"{o[:-4]}.mix{k}.wav"
+            args = [main_path, "--music", bed, "--music-volume", fmt_db(bed_gain)]
+            if k == 1 and duck:
+                args += self._duck_flags(duck, f"operation {node.node_id}")
+            if k == 1 and main_gain:
+                args += ["--gain", fmt_db(main_gain)]
+            calls.append(("audio", args + ["-o", target]))
+            main_path = target
+        return calls
+
+    def _track_args(self, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], node: Node, o: str) -> List[str]:
+        """ffmpeg-skill/audio --track: language mix 0 is the input's own sound, each other one more track, each named
+        and tagged (values passed as --flag=value, so a name can never be read as an option)."""
+        paths = [self._artifact_path(states[i], sources) for i in node.inputs]
+        args = [paths[0]]
+        for path in paths[1:]:
+            args += ["--track", path]
+        for t in node.parameters["tracks"]:
+            args.append(f"--track-name={t.get('title', '')}")
+        for t in node.parameters["tracks"]:
+            args.append(f"--track-lang={t['language']}")
+        return args + ["-o", o]
+
+    def _run_pcm(self, st: NodeState, args: List[str]) -> None:
+        """An in-process step on 16-bit PCM WAV (pcm.py); recorded among the observed commands as `[in-process] ...`."""
+        p = st.node.parameters
+        t0 = time.monotonic()
+        if args[0] == "automix":
+            m = pcm.automix(args[2:], args[1], p["channels"], p["window_ms"], p["max_gain_rate_db_per_s"], p.get("hold_below_dbfs"))
+            st.measurements["automix"] = m
+            if m["clipped_samples"]:
+                self.warnings.append(f"AUTOMIX {st.node.node_id}: {m['clipped_samples']} samples reached full scale and were clipped (lower gain_db)")
+        elif args[0] == "pan":
+            m = pcm.pan_mono(args[2], args[1], float(args[3]))
+            st.measurements.setdefault("pan_applied", []).append(m)
+        else:
+            raise AudioError("INTERNAL_ERROR", f"unknown in-process step {args[0]!r}")
+        st.seconds += round(time.monotonic() - t0, 3)
+        st.tool_commands.append("[in-process] audio_production.pcm." + ("automix" if args[0] == "automix" else "pan_mono") + " " + " ".join(args[1:]))
 
     def _artifact_path(self, st: NodeState, sources: Dict[str, Dict[str, Any]]) -> str:
         if st.node.type == "SOURCE_TRACK" and st.artifact is None:
@@ -627,7 +732,12 @@ class Executor:
         try:
             loudness_data: Optional[Dict[str, Any]] = None
             for tool, args in self._argv(st, states, sources, out_path):
+                if tool == "pcm":
+                    self._run_pcm(st, args)
+                    continue
                 run = self.skill.run_tool(tool, args, timeout)
+                if node.type == "LANGUAGE_TRACKS":
+                    st.measurements["tracks"] = self._check_tracks(st, run.data)
                 st.seconds += run.seconds
                 st.tool_commands += run.commands
                 if tool == "cut" and isinstance(run.data.get("precision"), str):
@@ -640,7 +750,8 @@ class Executor:
                     # the duck ffmpeg-skill says it applied (its documented `audio.duck` report, 1.13+): which sidechain
                     # filter builds it is ffmpeg-skill's own business (sidechaincompress before A134, sidechaingate since)
                     st.measurements["duck"]["engine_report"] = run.data["audio"]["duck"]
-            st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources))
+            st.artifact = self._validate_artifact(out_path, st, expected_channels=self._expected_channels(states, st, sources),
+                                                  fmt="mkv" if node.type == "LANGUAGE_TRACKS" else None)
             if node.type == "STEM":
                 self._check_stem_length(st, states[node.inputs[0]], sources)
                 self._check_stem_headroom(st, out_path, timeout)
@@ -659,6 +770,47 @@ class Executor:
                                         "tool": f"ffmpeg-skill/{st.tool}", "tool_versions": dict(self.tool_versions),
                                         "skill": SKILL_ID, "skill_version": VERSION}, indent=2, sort_keys=True), encoding="utf-8")
         st.status = "completed"
+
+    def _check_tracks(self, st: NodeState, data: Dict[str, Any], where: Optional[str] = None) -> List[Dict[str, Any]]:
+        """The tracks ffmpeg-skill/audio --track reports writing (`tracks`: index, title, language, duration), checked
+        against the languages asked: one per language, in order, each with its language tag and name."""
+        want = st.node.parameters["tracks"]
+        got = data.get("tracks") if isinstance(data, dict) else None
+        what = where or f"MIX_TRACKS {st.node.parameters['mix_op']} (languages)"
+        if not isinstance(got, list) or len(got) != len(want):
+            raise AudioError("VALIDATION_ERROR", f"{what}: ffmpeg-skill/audio reported {len(got) if isinstance(got, list) else 'no'} track(s), expected {len(want)}",
+                             {"reason": "track_count_mismatch", "expected": len(want), "reported": got})
+        out = []
+        for t, g in zip(want, got):
+            g = g if isinstance(g, dict) else {}
+            if g.get("language") != t["language"] or (t.get("title") and g.get("title") != t["title"]):
+                raise AudioError("VALIDATION_ERROR", f"{what}: track {g.get('index')} reads language {g.get('language')!r} / name {g.get('title')!r}, "
+                                 f"expected {t['language']!r} / {t.get('title')!r}", {"reason": "track_tag_mismatch", "expected": t, "reported": g})
+            out.append({"language_id": t["language_id"], "language": g.get("language"), "title": g.get("title"), "index": g.get("index"), "duration": g.get("duration")})
+        return out
+
+    def language_tracks_summary(self, project: Any, out_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Summary of every MIX_TRACKS with languages (response key `language_tracks`): per language its members and status,
+        and the outputs that wrote the set (one track per language) or one language alone."""
+        by_node: Dict[str, List[Dict[str, Any]]] = {}
+        for r in out_results:
+            nid = (r.get("provenance") or {}).get("node_id")
+            if nid:
+                by_node.setdefault(nid, []).append({"output_id": r["output_id"], "path": r["path"], "format": r.get("format"), "status": r["status"],
+                                                    "tracks": r.get("tracks")})
+        out = []
+        for op in project.operations:
+            if op.type != "MIX_TRACKS" or "languages" not in op.parameters:
+                continue
+            langs = []
+            for lang in op.parameters["languages"]:
+                nid = f"op:{op.op_id}.{lang['language_id']}"
+                st = self._states.get(nid)
+                langs.append({"language_id": lang["language_id"], "language": lang["language"], "title": lang.get("title"), "node_id": nid,
+                              "members": [op.inputs[k] for k in st.node.parameters["members"]] if st else None,
+                              "status": st.status if st else "planned", "outputs": by_node.get(nid, [])})
+            out.append({"op_id": op.op_id, "languages": langs, "outputs": by_node.get(f"op:{op.op_id}", [])})
+        return out
 
     def _check_stem_length(self, st: NodeState, programme: NodeState, sources: Dict[str, Dict[str, Any]]) -> None:
         """A stem has exactly the programme's sample count (input 0's), else VALIDATION_ERROR: a stem one sample
@@ -898,10 +1050,14 @@ class Executor:
         target = self.staging_path(final)
         self._remove_partial(target)
         seconds, commands = 0.0, []
+        tracks = None
         try:
-            args = [src, "-o", str(target)]
+            # a track set is written again from its language mixes, straight to the output's container (mkv: PCM, mp4: AAC)
+            args = self._track_args(self._states, sources, st.node, str(target)) if st.node.type == "LANGUAGE_TRACKS" else [src, "-o", str(target)]
             run: ToolRun = self.skill.run_tool("audio", args, timeout)
             seconds, commands = run.seconds, run.commands
+            if st.node.type == "LANGUAGE_TRACKS":
+                tracks = self._check_tracks(st, run.data, f"output {out.output_id!r}")
             export_state = NodeState(Node(f"output:{out.output_id}", "EXPORT", [st.node.node_id]), stable_hash({"export": st.identity, "format": out.format}))
             export_state.segments = st.segments
             art = self._validate_artifact(target, export_state, expected_channels=st.artifact.channels if st.artifact else None, expect=out.expect, fmt=out.format)
@@ -920,7 +1076,9 @@ class Executor:
             seconds += delivered.pop("seconds")
             commands = commands + delivered.pop("commands")
         chain = self._provenance_chain(st)
-        extra = {"loudness": delivered} if delivered is not None else {}
+        extra: Dict[str, Any] = {"loudness": delivered} if delivered is not None else {}
+        if tracks is not None:
+            extra["tracks"] = tracks
         art.path = final       # the staged file is moved into place unchanged once every output passed (same sha256)
         return {"output_id": out.output_id, "status": "completed", "path": str(final), "format": out.format, "artifact": art.to_dict(), **extra,
                 "segments": [s.to_dict() for s in st.segments], "seconds": seconds, "tool_commands_observed": commands,
