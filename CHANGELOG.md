@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.5.1 - 2026-11-26
+
+- fix: MIX_TRACKS with one language writes one tagged track instead of failing (#51) (2aca001)
+
 ## v1.5.0 - 2026-11-26
 
 - feat: AUTOMIX (gain-sharing mix of microphone tracks) and MIX_TRACKS (pan, language-tagged tracks) (#50) (b10e206)
