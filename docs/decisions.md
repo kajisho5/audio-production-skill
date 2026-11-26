@@ -417,3 +417,26 @@
   - *Contract.* Additive: one operation (`MIX_TRACKS`, capability `audio.mix_tracks`), output formats `mkv` / `mp4`,
     three optional `audio` flags, the `language_tracks` key and response key. `si contract-diff`: additive, minor.
 
+
+- **ADR-31 A track set's --track call: a stream-less input, every language one --track.**
+  - *Need.* A MIX_TRACKS with one language must write one named, language-tagged track. 1.5.0 passed language mix 0
+    as the input and each other one as `--track`, so one language gave `--track-name` / `--track-lang` with no
+    `--track`, which ffmpeg-skill/audio refuses ("--track is off but --track-name / --track-lang was given"): a
+    TOOL_ERROR at run time that the dry run did not show.
+  - *Engine check* (ffmpeg-skill 4.15.0, `write_tracks`): the tracks are the input's sound when it has one, then each
+    `--track` file; an input with no audio stream and no picture adds nothing. An FFmpeg metadata file
+    (`;FFMETADATA1`, no stream) is such an input: `audio.py none.ffmeta --track ja.wav --track-name Japanese
+    --track-lang jpn -o x.mkv` writes one track tagged `jpn`, named `Japanese`, in `.mkv` and `.mp4`. Its
+    `--track-name` / `--track-lang` count has to match the `--track` count only from above; this skill always passes
+    one value of each per track.
+  - *Choice.* Every track set (one language or several) is written the same way: the input is that stream-less file,
+    written in the work directory next to the set's intermediate (`<id>.nostreams.ffmeta`) and removed after the
+    call, and every language mix is one `--track`, in order. The argv is checked at planning, dry run included,
+    against ffmpeg-skill's two rules (`executor.track_argv_problem`): names / languages only with a `--track`, one of
+    each per track. No ffmpeg call of this process; the file holds no media.
+  - *Requested from ffmpeg-skill:* `--track-name` / `--track-lang` without `--track` naming and tagging the input's
+    own sound (track 0), which would make the stream-less input unnecessary.
+  - *Measured* (tests/test_automix_languages.py): one language (floor 1 kHz at -12 dB, interpreter 440 Hz): one track
+    tagged `jpn` with its name, the interpreter 12.0 dB above the floor, in `mkv` and `mp4`; the dry run passes and
+    writes nothing; two languages as before (ADR-30).
+  - *Contract.* Unchanged (same flags, same keys); a patch release.

@@ -19,8 +19,8 @@ Which ffmpeg-skill tools are used, and for what (docs/ffmpeg-skill.md):
             (--music, always stream 0 of each already-resolved input; MIX.duck adds --duck --duck-amount [--duck-threshold
             --duck-attack --duck-release] to the call that folds the ducked bed), format conversion / extraction; AUTOMIX's
             and a panned MIX_TRACKS's inputs written as 16-bit PCM (plain `-o x.wav`, --mono for a 2-channel AUTOMIX input) for
-            the in-process sample arithmetic of pcm.py; a MIX_TRACKS with languages as one track per language (--track,
-            --track-name, --track-lang)
+            the in-process sample arithmetic of pcm.py; a MIX_TRACKS with languages as one track per language (a stream-less
+            input and one --track per language, --track-name, --track-lang; ADR-31)
   cut       TRIM (--start/--end), CUT / SILENCE_REMOVE / FILLER_REMOVE (--segments = kept ranges), always --accurate
             (sample precision); FILLER_REMOVE.declick_ms as --declick-ms
   loudness  NORMALIZE (-I/--tp/--lra/--sample-rate); verification reads the `result` field of that same call's

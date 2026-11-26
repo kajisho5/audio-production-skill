@@ -226,6 +226,36 @@ def test_mix_languages_two_tagged_tracks(workspace, skill_dir):
     assert results(d)["op:m"]["type"] == "LANGUAGE_TRACKS" and len(results(d)["op:m"]["measurements"]["tracks"]) == 2
 
 
+def test_mix_languages_one_language_one_tagged_track(workspace, skill_dir):
+    """One language is a track set of one track: tagged and named like any other, in mkv and mp4, and the dry run plans
+    exactly what the run then writes (the real ffmpeg-skill refuses --track-name / --track-lang without --track)."""
+    outputs = [{"output_id": "set", "operation": "op:m", "path": "out/one.mkv", "format": "mkv", "expect": {"duration": 6.0}},
+               {"output_id": "set4", "operation": "op:m", "path": "out/one.mp4", "format": "mp4"}]
+    doc = request_doc([op("m", "MIX_TRACKS", ["track:floor", "track:ja"], levels=[{"gain_db": -12}, {}], languages=[LANGS[0]])],
+                      sources=LANG_SRCS[:2], tracks=LANG_TRKS[:2], outputs=outputs)
+    if not FfmpegSkill(skill_dir).info().takes_flag("audio", "track"):
+        code, d = run(doc)
+        assert not d["ok"] and d["error"]["details"]["reason"] == "ffmpeg_skill_flag_missing", d.get("error")
+        return
+    code, d = run(doc, "--dry-run")
+    assert d["ok"], d.get("error")
+    assert not (workspace / "out").exists() or not any((workspace / "out").iterdir())
+    code, d = run(doc)
+    assert d["ok"], d.get("error")
+    import json
+    for path in (workspace / "out" / "one.mkv", workspace / "out" / "one.mp4"):
+        r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a", "-show_entries", "stream=codec_name:stream_tags=language,title,handler_name",
+                            "-of", "json", str(path)], capture_output=True, text=True, check=True)
+        streams = json.loads(r.stdout)["streams"]
+        assert [s["tags"]["language"] for s in streams] == ["jpn"], streams
+        assert [s["tags"].get("title") or s["tags"].get("handler_name") for s in streams] == ["Japanese interpretation"], streams
+        floor, interp = channel_band(path, 0, 0.5, 3.5, 1000), channel_band(path, 0, 0.5, 3.5, 440)
+        assert abs(interp - floor - 12.0) < 1.0, (path.name, floor, interp)      # the floor 12 dB under the interpreter
+    summary = d["language_tracks"][0]
+    assert [t["language"] for t in summary["outputs"][0]["tracks"]] == ["jpn"]
+    assert len(results(d)["op:m"]["measurements"]["tracks"]) == 1
+
+
 def test_mix_languages_refusals(workspace):
     wav = [{"output_id": "o", "operation": "op:m", "path": "out/x.wav", "format": "wav"}]
     code, d = run(lang_request(wav))

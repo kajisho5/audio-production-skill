@@ -75,6 +75,24 @@ TOOL_FOR: Dict[str, Tuple[str, List[str]]] = {
 }
 TRACK_FLAGS = ("track", "track_name", "track_lang")           # ffmpeg-skill/audio flags a track set needs (4.x, #420)
 TRACK_SET_SUFFIX = ".mkv"                                     # intermediate of a track set: Matroska, PCM tracks
+# the input of every --track call: an FFmpeg metadata file with no stream, so ffmpeg-skill/audio adds no sound of its
+# own and every language mix is one --track (ADR-31); written in the work directory, removed after the call
+NO_STREAM_INPUT = ";FFMETADATA1\n"
+NO_STREAM_SUFFIX = ".nostreams.ffmeta"
+
+
+def track_argv_problem(args: List[str]) -> Optional[str]:
+    """What ffmpeg-skill/audio refuses in a --track argv built here (its check_track_flags / write_tracks rules), or
+    None: --track-name / --track-lang need at least one --track, and as many values as tracks. The input carries no
+    stream (NO_STREAM_INPUT), so the tracks are exactly the --track files. Checked at planning, dry run included."""
+    tracks = sum(1 for a in args if a == "--track")
+    for flag in ("--track-name", "--track-lang"):
+        given = sum(1 for a in args if a.startswith(flag + "="))
+        if given and not tracks:
+            return f"{flag} without --track"
+        if given != tracks:
+            return f"{given} {flag} value(s) for {tracks} track(s)"
+    return None if tracks else "no --track"
 
 
 @dataclass
@@ -137,6 +155,7 @@ class Executor:
         self.capabilities = dict(capabilities or {})   # capability -> supported | unsupported | unknown (doctor)
         self.warnings: List[str] = []
         self._states: Dict[str, NodeState] = {}
+        self._work_dir: Optional[Path] = None
 
     # ---- entry points
     def response(self, document: Any, validate_only: bool = False) -> Dict[str, Any]:
@@ -204,6 +223,7 @@ class Executor:
             st.tool, st.capabilities = self._select_tool(node)
             states[n] = st
         self._states = states
+        self._work_dir = work_dir
         # plan: timeline + tool argv templates (pure; also the dry-run output)
         for n in graph.order:
             self._plan_node(states, states[n], sources)
@@ -385,6 +405,11 @@ class Executor:
         elif node.type == "LANGUAGE_TRACKS":
             self._require_flags("audio", TRACK_FLAGS, where, "MIX_TRACKS languages (one track per language)")
             st.segments = list(ins[0].segments)
+            # the argv the run will pass, with the planned paths: refused here (dry run included) if ffmpeg-skill would
+            problem = track_argv_problem(self._track_args(states, sources, node, "planned.mkv", planned=True))
+            if problem:
+                raise AudioError("INTERNAL_ERROR", f"{where}: the --track call built for {len(node.inputs)} language(s) would be refused by ffmpeg-skill/audio ({problem})",
+                                 {"reason": "track_argv_invalid", "problem": problem})
             if "duck" in p:
                 # refused here, at planning (dry run included), when the located ffmpeg-skill cannot duck as asked
                 st.measurements["duck"] = {**p["duck"], "key_input": 0, "ffmpeg_skill_flags": " ".join(self._duck_flags(p["duck"], where))}
@@ -529,7 +554,7 @@ class Executor:
     def sidecars(out_path: Path) -> List[Path]:
         """Temporary files a node may create next to its intermediate (decoded copy, MIX fold steps)."""
         base = str(out_path)[:-4]
-        return [Path(f"{base}.{kind}{k}.wav") for kind in ("mix", "am", "panc", "pan") for k in range(0, 8)]
+        return [Path(f"{base}.{kind}{k}.wav") for kind in ("mix", "am", "panc", "pan") for k in range(0, 8)] + [Path(base + NO_STREAM_SUFFIX)]
 
     def _argv(self, st: NodeState, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], out_path: Path) -> List[Tuple[str, List[str]]]:
         """One or more ffmpeg-skill invocations (tool, argv without the script and --json) for this node. Every value
@@ -689,18 +714,36 @@ class Executor:
             main_path = target
         return calls
 
-    def _track_args(self, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], node: Node, o: str) -> List[str]:
-        """ffmpeg-skill/audio --track: language mix 0 is the input's own sound, each other one more track, each named
-        and tagged (values passed as --flag=value, so a name can never be read as an option)."""
-        paths = [self._artifact_path(states[i], sources) for i in node.inputs]
-        args = [paths[0]]
-        for path in paths[1:]:
+    def _track_input(self, node: Node) -> Path:
+        """The stream-less input of a track set's --track call (NO_STREAM_INPUT), in the work directory."""
+        if self._work_dir is None:
+            raise AudioError("INTERNAL_ERROR", "a track set is written before the work directory is known")
+        return self._work_dir / f"{self._states[node.node_id].identity[:16]}{NO_STREAM_SUFFIX}"
+
+    def _track_args(self, states: Dict[str, NodeState], sources: Dict[str, Dict[str, Any]], node: Node, o: str, planned: bool = False) -> List[str]:
+        """ffmpeg-skill/audio --track: the input is a file with no stream (_track_input), so ffmpeg-skill adds no sound
+        of its own and every language mix is one --track, in order, each named and tagged (values passed as
+        --flag=value, so a name can never be read as an option). One language is one --track too: ffmpeg-skill refuses
+        --track-name / --track-lang without a --track. `planned`: the intermediate paths, nothing has to exist yet."""
+        paths = [str(self._intermediate_path(self._work_dir or Path("."), states[i])) if planned else self._artifact_path(states[i], sources) for i in node.inputs]
+        args = [str(self._track_input(node))]
+        for path in paths:
             args += ["--track", path]
         for t in node.parameters["tracks"]:
             args.append(f"--track-name={t.get('title', '')}")
         for t in node.parameters["tracks"]:
             args.append(f"--track-lang={t['language']}")
-        return args + ["-o", o]
+        args += ["-o", o]
+        problem = track_argv_problem(args)
+        if problem:
+            raise AudioError("INTERNAL_ERROR", f"the --track call for {node.node_id} would be refused by ffmpeg-skill/audio ({problem})",
+                             {"reason": "track_argv_invalid", "problem": problem})
+        return args
+
+    def _write_track_input(self, node: Node) -> Path:
+        path = self._track_input(node)
+        path.write_text(NO_STREAM_INPUT, encoding="utf-8")
+        return path
 
     def _run_pcm(self, st: NodeState, args: List[str]) -> None:
         """An in-process step on 16-bit PCM WAV (pcm.py); recorded among the observed commands as `[in-process] ...`."""
@@ -752,6 +795,8 @@ class Executor:
                 stale.unlink()
         try:
             loudness_data: Optional[Dict[str, Any]] = None
+            if node.type == "LANGUAGE_TRACKS":
+                self._write_track_input(node)
             for tool, args in self._argv(st, states, sources, out_path):
                 if tool == "pcm":
                     self._run_pcm(st, args)
@@ -1075,7 +1120,13 @@ class Executor:
         try:
             # a track set is written again from its language mixes, straight to the output's container (mkv: PCM, mp4: AAC)
             args = self._track_args(self._states, sources, st.node, str(target)) if st.node.type == "LANGUAGE_TRACKS" else [src, "-o", str(target)]
-            run: ToolRun = self.skill.run_tool("audio", args, timeout)
+            if st.node.type == "LANGUAGE_TRACKS":
+                self._write_track_input(st.node)
+            try:
+                run: ToolRun = self.skill.run_tool("audio", args, timeout)
+            finally:
+                if st.node.type == "LANGUAGE_TRACKS":
+                    self._remove_partial(self._track_input(st.node))
             seconds, commands = run.seconds, run.commands
             if st.node.type == "LANGUAGE_TRACKS":
                 tracks = self._check_tracks(st, run.data, f"output {out.output_id!r}")

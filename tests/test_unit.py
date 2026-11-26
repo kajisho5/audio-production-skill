@@ -681,3 +681,17 @@ def test_unreferenced_mix_tracks_is_refused():
            {"op_id": "g", "type": "GAIN", "inputs": ["track:f"], "parameters": {"gain_db": 1}}]
     e = err(OperationGraph, "DEPENDENCY_ERROR", parse_request(request_doc(ops, tracks=tracks)).project)
     assert e.details["unreachable"] == ["op:m"]
+
+
+def test_track_argv_problem_mirrors_ffmpeg_skill_refusals():
+    """ffmpeg-skill/audio refuses --track-name / --track-lang without --track, and more values than tracks: the argv a
+    track set is written with is checked against the same rules at planning (dry run included)."""
+    from audio_production.executor import track_argv_problem
+    one = ["in.ffmeta", "--track", "ja.wav", "--track-name=Japanese", "--track-lang=jpn", "-o", "o.mkv"]
+    assert track_argv_problem(one) is None
+    assert track_argv_problem(["in.ffmeta", "--track", "ja.wav", "--track", "en.wav", "--track-name=", "--track-name=E",
+                               "--track-lang=jpn", "--track-lang=eng", "-o", "o.mkv"]) is None
+    # the 1.5.0 argv for one language: the mix as the input, no --track
+    assert "without --track" in track_argv_problem(["ja.wav", "--track-name=Japanese", "--track-lang=jpn", "-o", "o.mkv"])
+    assert "for 1 track" in track_argv_problem(["in.ffmeta", "--track", "ja.wav", "--track-name=A", "--track-name=B", "--track-lang=jpn", "-o", "o.mkv"])
+    assert track_argv_problem(["in.ffmeta", "-o", "o.mkv"]) == "no --track"
