@@ -248,3 +248,22 @@ def test_mix_languages_refusals(workspace):
     doc["project"]["outputs"] = [{"output_id": "o", "operation": "op:g", "path": "out/x.wav", "format": "wav"}]
     code, d = run(doc)
     assert not d["ok"] and d["error"]["details"]["reason"] == "track_set_reference" and d["error"]["details"]["languages"] == ["op:m.en", "op:m.ja"]
+
+
+def test_mix_with_input_0_muted_keeps_input_0s_duration(workspace):
+    """Input 0 muted still sets the duration (6 s): the live 4 s input is conformed to it, for MIX, MIX_TRACKS and a
+    language mix whose floor is muted."""
+    srcs = [{"source_id": "a", "path": "tone.wav"}, {"source_id": "b", "path": "sfx.wav"}, {"source_id": "c", "path": "bed.wav"}]
+    trks = [{"track_id": "a", "source_id": "a"}, {"track_id": "b", "source_id": "b"}, {"track_id": "c", "source_id": "c"}]
+    for typ, inputs, params in (("MIX", ["track:a", "track:b"], {"levels": [{"mute": True}, {}]}),
+                                ("MIX_TRACKS", ["track:a", "track:b", "track:c"], {"levels": [{"mute": True}, {"pan": -1}, {}]})):
+        n = len(inputs)
+        code, d = run(request_doc([op("m", typ, inputs, **params)], sources=srcs[:n], tracks=trks[:n],
+                                  outputs=[{"output_id": "o", "operation": "op:m", "path": "out/m.wav", "format": "wav", "expect": {"duration": 6.0, "duration_tolerance": 0.01}}]))
+        assert d["ok"], (typ, d.get("error"))
+        assert band_level_dbfs(workspace / "out" / "m.wav", 0.5, 3.5, 1000) < -60, typ        # the muted input is not heard
+        assert band_level_dbfs(workspace / "out" / "m.wav", 0.5, 3.5, 2000) > -40, typ        # the live one is
+    code, d = run(lang_request([{"output_id": "o", "operation": "op:m.ja", "path": "out/ja.wav", "format": "wav", "expect": {"duration": 6.0, "duration_tolerance": 0.01}}],
+                               levels=[{"mute": True}, {}, {}]))
+    assert d["ok"], d.get("error")
+    assert results(d)["op:m.ja"]["segments"] and {s["source_id"] for s in results(d)["op:m.ja"]["segments"]} == {"floor", "ja"}

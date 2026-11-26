@@ -107,6 +107,8 @@ class OperationGraph:
                         params["title"] = lang["title"]
                     self._add(Node(f"{nid}.{lang['language_id']}", "LANGUAGE_MIX", list(inputs), params, implicit=True))
                     langs.append(f"{nid}.{lang['language_id']}")
+                if not langs and not whole:
+                    raise AudioError("DEPENDENCY_ERROR", f"operations not connected to any output: ['{nid}']", {"unreachable": [nid]})
                 if whole:
                     tracks = [{k: lang[k] for k in ("language_id", "language", "title") if k in lang} for lang in op.parameters["languages"]]
                     self._add(Node(nid, "LANGUAGE_TRACKS", langs, {"mix_op": op.op_id, "tracks": tracks}, implicit=True))

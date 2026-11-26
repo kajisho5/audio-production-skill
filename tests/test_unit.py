@@ -661,3 +661,23 @@ def test_mix_tracks_parameters_graph_and_references():
     e = err(parse_request, "INVALID_REQUEST", request_doc(ops + [{"op_id": "g", "type": "GAIN", "inputs": ["op:m"], "parameters": {"gain_db": 1}}], tracks=tracks,
                                                            outputs=[{"output_id": "g", "operation": "op:g", "path": "o/g.wav", "format": "wav"}]))
     assert e.details["reason"] == "track_set_reference"
+
+
+def test_automix_last_short_hop_keeps_the_rate(tmp_path):
+    """A final hop of one sample gets one sample's slew budget (not a whole hop's), and its rate is measured over it."""
+    from audio_production import pcm
+    a = [1000] * 8000 + [30000]
+    _pcm_wav(tmp_path / "a.wav", a, 8000)
+    _pcm_wav(tmp_path / "b.wav", [1000] * 8001, 8000)
+    ch = [{"gain_db": 0.0, "weight_db": 0.0, "pinned": False}] * 2
+    m = pcm.automix([str(tmp_path / "a.wav"), str(tmp_path / "b.wav")], str(tmp_path / "o.wav"), ch, 50.0, 400.0)
+    assert m["measured_max_gain_rate_db_per_s"] <= 400.0 + 1e-6, m
+
+
+def test_unreferenced_mix_tracks_is_refused():
+    tracks = [{"track_id": t, "source_id": "a"} for t in ("f", "j")]
+    ops = [{"op_id": "m", "type": "MIX_TRACKS", "inputs": ["track:f", "track:j"],
+            "parameters": {"languages": [{"language_id": "ja", "language": "jpn", "inputs": [1]}]}},
+           {"op_id": "g", "type": "GAIN", "inputs": ["track:f"], "parameters": {"gain_db": 1}}]
+    e = err(OperationGraph, "DEPENDENCY_ERROR", parse_request(request_doc(ops, tracks=tracks)).project)
+    assert e.details["unreachable"] == ["op:m"]

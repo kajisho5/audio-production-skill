@@ -350,9 +350,13 @@ class Executor:
             fade_ranges(ins[0].segments, p["duration"] if node.type == "FADE_IN" else None, p["duration"] if node.type == "FADE_OUT" else None)
             st.segments = list(ins[0].segments)
         elif node.type in ("MIX", "MIX_TRACKS", "LANGUAGE_MIX"):
-            st.segments = mix([i.segments for i in ins])
+            # a language mix sums only its members (input 0, the floor, is always one: it sets the duration)
+            st.segments = mix([ins[k].segments for k in p["members"]] if node.type == "LANGUAGE_MIX" else [i.segments for i in ins])
             if all(lv["mute"] for lv in p["levels"]):
                 raise AudioError("INVALID_REQUEST", f"{where}: every MIX input is muted", {"node_id": node.node_id})
+            if p["levels"][0]["mute"]:
+                # input 0 muted still sets the duration: the first live input is conformed to it (ffmpeg-skill/audio --replace)
+                self._require_flags("audio", ("replace",), where, f"{node.type} with input 0 muted")
             if "duck" in p:
                 # refused here, at planning (dry run included), when the located ffmpeg-skill cannot duck as asked
                 st.measurements["duck"] = {**p["duck"], "key_input": 0, "ffmpeg_skill_flags": " ".join(self._duck_flags(p["duck"], where))}
@@ -650,6 +654,7 @@ class Executor:
             order.remove(duck["input"])
             order.insert(1, duck["input"])
         panned = any("pan" in lv for lv in levels)
+        programme = self._artifact_path(states[node.inputs[0]], sources)
         live: List[Tuple[str, float]] = []
         for j in order:
             lv = levels[j]
@@ -663,6 +668,14 @@ class Executor:
                 path = placed
             live.append((path, lv["gain_db"]))
         main_path, main_gain = live[0]
+        if levels[0]["mute"]:
+            # input 0 is muted but sets the duration (as MIX): the first live input replaces its sound, padded / trimmed
+            # to input 0's length (ffmpeg-skill/audio --replace, checked at planning), before anything is folded on it
+            head = [programme, "--replace", main_path] + (["--gain", fmt_db(main_gain)] if main_gain else [])
+            if len(live) == 1:
+                return calls + [("audio", head + ["-o", o])]
+            calls.append(("audio", head + ["-o", f"{o[:-4]}.mix0.wav"]))
+            main_path, main_gain = f"{o[:-4]}.mix0.wav", 0.0
         if len(live) == 1:
             return calls + [("audio", [main_path, "--gain", fmt_db(main_gain), "-o", o])]
         for k, (bed, bed_gain) in enumerate(live[1:], start=1):
@@ -693,6 +706,16 @@ class Executor:
         """An in-process step on 16-bit PCM WAV (pcm.py); recorded among the observed commands as `[in-process] ...`."""
         p = st.node.parameters
         t0 = time.monotonic()
+        try:
+            self._pcm_step(st, p, args)
+        except KeyboardInterrupt:
+            # as a tool interrupted by a signal (adapter): CANCELLED, so the partial output is removed and nothing raises out
+            self.skill.cancel()
+            raise AudioError("CANCELLED", "interrupted while an in-process step was running", {"reason": "signal"})
+        st.seconds += round(time.monotonic() - t0, 3)
+        st.tool_commands.append("[in-process] audio_production.pcm." + ("automix" if args[0] == "automix" else "pan_mono") + " " + " ".join(args[1:]))
+
+    def _pcm_step(self, st: NodeState, p: Dict[str, Any], args: List[str]) -> None:
         if args[0] == "automix":
             m = pcm.automix(args[2:], args[1], p["channels"], p["window_ms"], p["max_gain_rate_db_per_s"], p.get("hold_below_dbfs"))
             st.measurements["automix"] = m
@@ -703,8 +726,6 @@ class Executor:
             st.measurements.setdefault("pan_applied", []).append(m)
         else:
             raise AudioError("INTERNAL_ERROR", f"unknown in-process step {args[0]!r}")
-        st.seconds += round(time.monotonic() - t0, 3)
-        st.tool_commands.append("[in-process] audio_production.pcm." + ("automix" if args[0] == "automix" else "pan_mono") + " " + " ".join(args[1:]))
 
     def _artifact_path(self, st: NodeState, sources: Dict[str, Dict[str, Any]]) -> str:
         if st.node.type == "SOURCE_TRACK" and st.artifact is None:

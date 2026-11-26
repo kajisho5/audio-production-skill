@@ -383,6 +383,8 @@
     than the stated rate (the power sum moves no faster than the fastest level). `pinned` inputs stay at `gain_db`;
     `weight_db` scales a noisy input's level; `hold_below_dbfs` freezes the levels while everything is quiet, so the
     last open input stays open. Both `window_ms` and `max_gain_rate_db_per_s` are required: no production default.
+    The inputs are read and the mix written in blocks, so memory stays bounded on hour-long recordings; a short last
+    hop gets its own (shorter) slew budget.
   - *Measured* (tests/test_automix_languages.py, three 12 s microphones, bleed -15.4 dB, self-noise -53 dBFS; gains read
     from each microphone's own marker tone in the mix): the talking microphone -0.2..-0.3 dB, the two others -15.4..-16.0
     dB; shared gains summed -0.06..+0.04 dB; pauses -4.9 dB each (-10*log10 3 = -4.77), the mix's noise that of one
