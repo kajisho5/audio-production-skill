@@ -12,7 +12,7 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
   video-production-agent must re-pin before it can plan them); AUTOMIX 2026-11-26, ADR-29: gain-sharing mix of 2..8
   microphone inputs computed in this process on 16-bit PCM (`pcm.py`); MIX_TRACKS 2026-11-26, ADR-30: MIX with a pan per
   1-channel input and `languages` (one mix per language, written as language-tagged tracks of one mkv / mp4 through
-  ffmpeg-skill 4.x `audio --track`, response key `language_tracks`); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
+  ffmpeg-skill 4.x `audio --track`, response key `language_tracks`; one language is one tagged track too, every language one `--track` beside a stream-less input, the argv checked at planning: ADR-31, 1.5.1); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
   `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS`, `VOICE_CLEANUP` take `audio_stream`
   (0-based, default 0) to pick which audio stream of their one input `ffmpeg-skill/audio` processes.
 - Execution through any ffmpeg-skill whose contract declares the required tools and flags — no version window
