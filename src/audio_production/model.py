@@ -38,6 +38,9 @@ OUTPUT_FORMATS: Dict[str, Dict[str, Any]] = {
     "aac": {"extension": ".aac", "codec": "aac", "capability": "encoder:aac", "lossless": False},
     "ogg": {"extension": ".ogg", "codec": "vorbis", "capability": "encoder:libvorbis", "lossless": False},
     "opus": {"extension": ".opus", "codec": "opus", "capability": "encoder:libopus", "lossless": False},
+    # one audio track per language of a MIX_TRACKS with languages (ffmpeg-skill/audio --track): only for those, and they only to these
+    "mkv": {"extension": ".mkv", "codec": "pcm_s24le", "capability": "encoder:pcm_s24le", "lossless": True},
+    "mp4": {"extension": ".mp4", "codec": "aac", "capability": "encoder:aac", "lossless": False},
 }
 INTERMEDIATE_FORMAT = "wav"   # every intermediate artifact is PCM WAV: no generation loss between operations
 
@@ -56,6 +59,27 @@ TRANSCRIPT_SCHEMA = "transcription-skill/transcript/0.1"   # the transcript docu
 # ---- parameter schemas: name -> {type, required, min, max, enum, description}
 _NUM, _INT, _BOOL, _STR, _RANGES, _LEVELS, _STAGE = "number", "integer", "boolean", "string", "ranges", "levels", "stage"
 _DUCK, _WORDS, _TRANSCRIPT, _LEXICON, _VERSIONS, _STEMS = "duck", "words", "transcript", "lexicon", "loudness_versions", "stems"
+_AUTOMIX_CHANNELS, _LANGUAGES = "automix_channels", "languages"
+
+# AUTOMIX: per-input settings of a gain-sharing mix (pcm.py, ADR-29); every field has the neutral default
+AUTOMIX_CHANNEL_FIELDS: Dict[str, Dict[str, Any]] = {
+    "gain_db": {"type": _NUM, "min": -60.0, "max": 60.0, "default": 0.0, "description": "fixed gain added to the input's share (a pinned input: its whole gain)"},
+    "weight_db": {"type": _NUM, "min": -30.0, "max": 30.0, "default": 0.0,
+                  "description": "scales the input's measured level only: a negative weight gives a noisy input a smaller share (ignored when pinned)"},
+    "pinned": {"type": _BOOL, "default": False, "description": "true: the input is not shared; it is mixed at gain_db throughout (e.g. a moderator's microphone that stays open)"},
+}
+
+# MIX_TRACKS.languages: one mix per language, written as one track each (ffmpeg-skill/audio --track, ADR-30)
+MAX_LANGUAGES = 8
+LANGUAGE_CODE_RE = re.compile(r"^[a-z]{3}$")          # ISO 639-2, as ffmpeg-skill --track-lang takes it
+LANGUAGE_FIELDS: Dict[str, Dict[str, Any]] = {
+    "language_id": {"type": _STR, "required": True, "description": "id of the language mix; it is referenced as op:<op_id>.<language_id>"},
+    "language": {"type": _STR, "required": True, "pattern": LANGUAGE_CODE_RE.pattern, "description": "ISO 639-2 code written as the track's language tag (eng, jpn, ...)"},
+    "title": {"type": _STR, "required": False, "max_length": 64, "description": "track name (omit: none)"},
+    "inputs": {"type": "array", "required": True, "description": "indexes (>= 1) of the inputs only this language's mix has (an interpreter, a dub); "
+                                                                 "inputs named by no language are the floor sound, in every language's mix"},
+}
+TRACK_SET_FORMATS = ("mkv", "mp4")    # the output formats that hold one audio track per language
 
 # STEMS: the inputs of a mix grouped into stems written as separate files, each of the programme's length (input 0's
 # duration, as MIX) and aligned to its first sample, so the stems summed are the mix (same levels, no ducking)
@@ -176,6 +200,28 @@ OPERATION_TYPES: Dict[str, Dict[str, Any]] = {
                  "description": "sidechain ducking (ffmpeg-skill/audio --duck): the input named by duck.input is lowered by amount_db while input 0 is above the threshold; "
                                 "every other input is mixed un-ducked. Input 0 and the ducked input must be unmuted. Needs an ffmpeg-skill whose contract declares --duck "
                                 "(and --duck-threshold / --duck-attack / --duck-release when those are given); otherwise refused with TOOL_ERROR before a tool runs"}}},
+    "MIX_TRACKS": {"description": "MIX (the same fold, levels and duration: input 0's) with a pan per input and an optional set of language mixes written as one "
+                                  "language-tagged track each (e.g. the floor sound under each interpreter); no duck", "inputs": (2, MAX_MIX_INPUTS), "parameters": {
+        "levels": {"type": _LEVELS, "required": False, "description": "per-input {gain_db, mute, pan?}, aligned with inputs (omit: 0 dB, unmuted, no pan). "
+                                                                   "pan -1 (left) .. 1 (right), constant power (0: -3.01 dB per side), on a 1-channel input only; "
+                                                                   "with any pan the mix is stereo and every other 1-channel input is centred"},
+        "languages": {"type": _LANGUAGES, "required": False,
+                      "description": f"1..{MAX_LANGUAGES} language mixes [{{language_id, language, title?, inputs}}]: each is the floor (input 0 and every input no "
+                                     "language names) plus that language's inputs, at the same levels and pans; referenced as op:<op_id>.<language_id>. The "
+                                     "operation itself is then a track set: an output referencing it is written as one audio track per language, named and tagged "
+                                     "with its language (format mkv: PCM, mp4: AAC; ffmpeg-skill/audio --track). Without languages the operation is one mix"}}},
+    "AUTOMIX": {"description": "Gain-sharing automatic mix of 2..8 microphone inputs (one person each): every shared input's gain follows its share of the total level, "
+                               "so the shared gains always sum to 0 dB (power) and the noise of the mix stays that of one open input; the inputs not carrying the "
+                               "sound are as far down as their level is below the one that is. Mono output, input 0's duration; every input must share one sample rate. "
+                               "Computed in this process on 16-bit PCM (ffmpeg-skill has no gain envelope)", "inputs": (2, MAX_MIX_INPUTS), "parameters": {
+        "window_ms": {"type": _NUM, "required": True, "min": 1.0, "max": 1000.0, "description": "time constant of the level measurement in ms (no default)"},
+        "max_gain_rate_db_per_s": {"type": _NUM, "required": True, "min": 10.0, "max": 10000.0,
+                                   "description": "no input's gain changes faster than this, dB per second (no default); reported as measured"},
+        "channels": {"type": _AUTOMIX_CHANNELS, "required": False, "description": "per-input {gain_db?, weight_db?, pinned?}, aligned with inputs (omit: 0 dB, weight 0, shared); "
+                                                                                 "at least one input must be shared"},
+        "hold_below_dbfs": {"type": _NUM, "required": False, "min": -100.0, "max": 0.0,
+                            "description": "while every shared input's level is below this, the gains hold: the last open input stays open through a pause "
+                                           "(omit: the shares follow the inputs' own noise)"}}},
     "MONO": {"description": "Down-mix to one channel (stereo input: 0.5*L + 0.5*R)", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
     "STEREO": {"description": "Force two channels (mono is duplicated to both sides)", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
     "DOWNMIX": {"description": "Down-mix 5.1 / 7.1 to stereo with standard centre / LFE / surround weights", "inputs": (1, 1), "parameters": {"audio_stream": AUDIO_STREAM_PARAM}},
@@ -372,18 +418,84 @@ def _ranges(value: Any, where: str) -> List[TimeRange]:
     return out
 
 
-def _levels(value: Any, where: str, n_inputs: int) -> List[Dict[str, Any]]:
+def _levels(value: Any, where: str, n_inputs: int, allow_pan: bool = False) -> List[Dict[str, Any]]:
     if not isinstance(value, list) or len(value) != n_inputs:
         raise AudioError("INVALID_REQUEST", f"{where} must be an array with one entry per input ({n_inputs})", {"field": where})
     out = []
     for i, lv in enumerate(value):
-        d = _obj(lv, f"{where}[{i}]", ("gain_db", "mute"), ())
+        d = _obj(lv, f"{where}[{i}]", ("gain_db", "mute", "pan") if allow_pan else ("gain_db", "mute"), ())
         gain = _number(d.get("gain_db", 0.0), f"{where}[{i}].gain_db", -60.0, 60.0)
         mute = d.get("mute", False)
         if not isinstance(mute, bool):
             raise AudioError("INVALID_REQUEST", f"{where}[{i}].mute must be a boolean", {"field": where})
-        out.append({"gain_db": gain, "mute": mute})
+        e: Dict[str, Any] = {"gain_db": gain, "mute": mute}
+        if "pan" in d:
+            e["pan"] = _number(d["pan"], f"{where}[{i}].pan", -1.0, 1.0)
+        out.append(e)
     return out
+
+
+def _automix_channels(value: Any, where: str, n_inputs: int) -> List[Dict[str, Any]]:
+    if not isinstance(value, list) or len(value) != n_inputs:
+        raise AudioError("INVALID_REQUEST", f"{where} must be an array with one entry per input ({n_inputs})", {"field": where})
+    out = []
+    for i, c in enumerate(value):
+        d = _obj(c, f"{where}[{i}]", tuple(AUTOMIX_CHANNEL_FIELDS), ())
+        e: Dict[str, Any] = {}
+        for k, spec in AUTOMIX_CHANNEL_FIELDS.items():
+            v = d.get(k, spec["default"])
+            if spec["type"] == _BOOL:
+                if not isinstance(v, bool):
+                    raise AudioError("INVALID_REQUEST", f"{where}[{i}].{k} must be a boolean", {"field": f"{where}[{i}].{k}"})
+                e[k] = v
+            else:
+                e[k] = _number(v, f"{where}[{i}].{k}", spec["min"], spec["max"])
+        out.append(e)
+    if all(c["pinned"] for c in out):
+        raise AudioError("INVALID_REQUEST", f"{where}: every input is pinned; at least one must be shared", {"field": where})
+    return out
+
+
+def _languages(value: Any, where: str, n_inputs: int) -> List[Dict[str, Any]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_LANGUAGES:
+        raise AudioError("INVALID_REQUEST", f"{where} must be an array of 1..{MAX_LANGUAGES} languages", {"field": where})
+    out: List[Dict[str, Any]] = []
+    seen: Dict[int, str] = {}
+    for i, lang in enumerate(value):
+        w = f"{where}[{i}]"
+        d = _obj(lang, w, tuple(LANGUAGE_FIELDS), tuple(k for k, v in LANGUAGE_FIELDS.items() if v["required"]))
+        lid = _id(d["language_id"], f"{w}.language_id")
+        if any(x["language_id"] == lid for x in out):
+            raise AudioError("INVALID_REQUEST", f"{w}.language_id {lid!r} is used twice", {"field": w})
+        code = d["language"]
+        if not isinstance(code, str) or not LANGUAGE_CODE_RE.match(code):
+            raise AudioError("INVALID_REQUEST", f"{w}.language must be an ISO 639-2 code (three lowercase letters, e.g. eng, jpn)", {"field": f"{w}.language"})
+        e: Dict[str, Any] = {"language_id": lid, "language": code}
+        if "title" in d:
+            title = _printable(d["title"], f"{w}.title", 64)
+            if not title.strip():
+                raise AudioError("INVALID_REQUEST", f"{w}.title must not be blank", {"field": f"{w}.title"})
+            e["title"] = title
+        idx = d["inputs"]
+        if not isinstance(idx, list) or not idx:
+            raise AudioError("INVALID_REQUEST", f"{w}.inputs must be a non-empty array of input indexes", {"field": f"{w}.inputs"})
+        members = []
+        for j, k in enumerate(idx):
+            k = int(_number(k, f"{w}.inputs[{j}]", 1, n_inputs - 1, integer=True))
+            if k in seen:
+                raise AudioError("INVALID_REQUEST", f"{w}.inputs: input {k} already belongs to language {seen[k]!r} (an input is in at most one language)",
+                                 {"field": f"{w}.inputs", "input": k})
+            seen[k] = lid
+            members.append(k)
+        e["inputs"] = members
+        out.append(e)
+    return out
+
+
+def language_members(params: Dict[str, Any], n_inputs: int, language: Dict[str, Any]) -> List[int]:
+    """Input indexes of one language's mix: the floor (input 0 and every input no language names), then its own."""
+    named = {k for lang in params["languages"] for k in lang["inputs"]}
+    return [k for k in range(n_inputs) if k not in named] + list(language["inputs"])
 
 
 def _duck(value: Any, where: str, n_inputs: int) -> Dict[str, Any]:
@@ -559,7 +671,10 @@ PART_OPERATIONS: Dict[str, Tuple[str, str]] = {"LOUDNESS_SET": ("versions", "ver
 
 
 def part_ids(op: "AudioOperation") -> List[str]:
-    """op ids under which the parts of a LOUDNESS_SET (versions) or STEMS (stems) operation are referenced."""
+    """op ids under which the parts of a LOUDNESS_SET (versions), a STEMS (stems) or a MIX_TRACKS with languages (language
+    mixes) operation are referenced."""
+    if op.type == "MIX_TRACKS" and "languages" in op.parameters:
+        return [f"{op.op_id}.{v['language_id']}" for v in op.parameters["languages"]]
     if op.type not in PART_OPERATIONS:
         return []
     key, field_id = PART_OPERATIONS[op.type]
@@ -613,7 +728,7 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
         elif t == _RANGES:
             out[name] = [r.to_dict() for r in _ranges(v, w)]
         elif t == _LEVELS:
-            out[name] = _levels(v, w, n_inputs)
+            out[name] = _levels(v, w, n_inputs, allow_pan=op_type == "MIX_TRACKS")
         elif t == _DUCK:
             out[name] = _duck(v, w, n_inputs)
         elif t == _WORDS:
@@ -626,6 +741,10 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
             out[name] = _loudness_versions(v, w)
         elif t == _STEMS:
             out[name] = _stems(v, w, n_inputs)
+        elif t == _AUTOMIX_CHANNELS:
+            out[name] = _automix_channels(v, w, n_inputs)
+        elif t == _LANGUAGES:
+            out[name] = _languages(v, w, n_inputs)
         elif t == _STAGE:
             spec_stage = DYNAMICS_STAGES[ps["stage"]]
             sd = _obj(v, w, tuple(spec_stage), ())
@@ -638,8 +757,14 @@ def validate_parameters(op_type: str, params: Any, n_inputs: int, where: str) ->
         out.setdefault("levels", [{"gain_db": 0.0, "mute": False} for _ in range(n_inputs)])
         if any(lv["mute"] for lv in out["levels"]):
             raise AudioError("INVALID_REQUEST", f"{where}.levels: mute is not accepted by STEMS (leave the input out instead)", {"field": f"{where}.levels"})
-    if op_type == "MIX" and "levels" not in out:
+    if op_type == "AUTOMIX":
+        out.setdefault("channels", [{k: s["default"] for k, s in AUTOMIX_CHANNEL_FIELDS.items()} for _ in range(n_inputs)])
+    if op_type in ("MIX", "MIX_TRACKS") and "levels" not in out:
         out["levels"] = [{"gain_db": 0.0, "mute": False} for _ in range(n_inputs)]
+    if op_type == "MIX_TRACKS" and "languages" in out:
+        for lang in out["languages"]:
+            if all(out["levels"][k]["mute"] for k in language_members(out, n_inputs, lang)):
+                raise AudioError("INVALID_REQUEST", f"{where}.languages: every input of language {lang['language_id']!r} is muted", {"field": f"{where}.languages"})
     if op_type == "MIX" and "duck" in out:
         k = out["duck"]["input"]
         if out["levels"][0]["mute"] or out["levels"][k]["mute"]:
@@ -773,10 +898,18 @@ def parse_request(doc: Any) -> AudioRequest:
     # measurement vouches for, and the delivered file would no longer be the version that was verified)
     versions = {vid for op in operations if op.type == "LOUDNESS_SET" for vid in part_ids(op)}
 
+    # a MIX_TRACKS with languages is a track set: an output may write it (one track per language), an operation may not read it
+    track_sets = {op.op_id: op for op in operations if op.type == "MIX_TRACKS" and "languages" in op.parameters}
+
     # reference existence (cycles / ordering are checked by graph.py)
     for op in operations:
         for ref in op.inputs:
             _not_a_set(ref, f"operation {op.op_id!r}")
+            kind, ident = parse_ref(ref, "")
+            if kind == "op" and ident in track_sets:
+                parts = sorted("op:" + x for x in part_ids(track_sets[ident]))
+                raise AudioError("INVALID_REQUEST", f"operation {op.op_id!r}: {ref!r} is a MIX_TRACKS with languages (one track per language); reference one of its "
+                                 f"language mixes: {parts}", {"ref": ref, "reason": "track_set_reference", "languages": parts})
             if parse_ref(ref, "")[1] in versions and ref.startswith("op:"):
                 raise AudioError("INVALID_REQUEST", f"operation {op.op_id!r}: {ref!r} is a LOUDNESS_SET version, which only an output may reference "
                                  "(process before the set, not after it)", {"op_id": op.op_id, "ref": ref, "reason": "loudness_version_not_terminal"})
@@ -828,6 +961,13 @@ def parse_request(doc: Any) -> AudioRequest:
             expect["duration_tolerance"] = _number(ex.get("duration_tolerance", 0.1), f"{w}.expect.duration_tolerance", 0.0, 3600.0)
         elif "duration_tolerance" in ex:
             raise AudioError("INVALID_REQUEST", f"{w}.expect.duration_tolerance requires expect.duration")
+        is_set = kind == "op" and ident in track_sets
+        if is_set != (fmt in TRACK_SET_FORMATS):
+            raise AudioError("UNSUPPORTED_FORMAT", f"{w}: " + (f"a MIX_TRACKS with languages is written as one track per language, format {' or '.join(TRACK_SET_FORMATS)}"
+                                                                 if is_set else f"format {fmt!r} holds one track per language and is only for a MIX_TRACKS with languages"),
+                             {"field": w, "format": fmt, "reason": "track_set_format"})
+        if is_set and ({"channels", "channel_layout"} & set(expect)):
+            raise AudioError("INVALID_REQUEST", f"{w}.expect: channels / channel_layout are per track; leave them out for a track set", {"field": f"{w}.expect"})
         outputs.append(AudioOutput(oid, od["operation"], od["path"], fmt, overwrite, expect))
     stem_refs = {"op:" + x for op in operations if op.type == "STEMS" for x in part_ids(op)}
     for o in outputs:

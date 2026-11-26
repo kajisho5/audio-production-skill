@@ -9,7 +9,10 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
   operation types (VOICE_CLEANUP added 2026-10-30, ADR-16; FILLER_REMOVE and MIX `duck` 2026-10-31, ADR-18 / ADR-19;
   LOUDNESS_SET 2026-11-12, ADR-23: several delivery loudness versions of one master, each re-measured, response key
   `loudness_sets`, each version with the `loudnorm_mode` (`linear` / `dynamic`) ffmpeg-skill reported (2026-11-13, ADR-26); STEMS 2026-11-12, ADR-24: stem files of a mix's inputs that sum to the mix, response key `stems`;
-  video-production-agent must re-pin before it can plan them); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
+  video-production-agent must re-pin before it can plan them); AUTOMIX 2026-11-26, ADR-29: gain-sharing mix of 2..8
+  microphone inputs computed in this process on 16-bit PCM (`pcm.py`); MIX_TRACKS 2026-11-26, ADR-30: MIX with a pan per
+  1-channel input and `languages` (one mix per language, written as language-tagged tracks of one mkv / mp4 through
+  ffmpeg-skill 4.x `audio --track`, response key `language_tracks`); sources may be audio files or video containers; outputs wav / flac / mp3 / m4a / aac / ogg / opus.
   `GAIN`, `FADE_IN`, `FADE_OUT`, `MONO`, `STEREO`, `DOWNMIX`, `NOISE_REDUCTION`, `DYNAMICS`, `VOICE_CLEANUP` take `audio_stream`
   (0-based, default 0) to pick which audio stream of their one input `ffmpeg-skill/audio` processes.
 - Execution through any ffmpeg-skill whose contract declares the required tools and flags — no version window
@@ -48,7 +51,7 @@ Maintained by the session that last changed the repository. Labels: CURRENT (in 
    → Workflow permissions) and, if `main` has branch protection, an allowance for GitHub Actions to push directly
    to it (or the push step in release.yml needs converting to open a PR instead). Do not claim PyPI availability
    before a human confirms a publish actually ran.
-2. Per-input pan in MIX, typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first.
+2. Typed CHANNEL_MAP, standalone RESAMPLE: each needs an ffmpeg-skill capability first (per-input pan: MIX_TRACKS, ADR-30).
 
 3. video-production-agent does not plan FILLER_REMOVE or MIX `duck` yet (ECOSYSTEM_ROADMAP step 5, agent side): it
    needs to re-pin the contract and lower transcript words / a ducking decision; its lowering currently refuses

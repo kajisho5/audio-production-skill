@@ -550,3 +550,134 @@ def test_stems_parameters_and_graph():
     g = OperationGraph(parse_request(request_doc(ops, outputs=outs, tracks=tracks)).project)
     assert "op:s" not in g.nodes and g.nodes["op:s.m"].type == "STEM" and g.nodes["op:s.m"].inputs == ["track:t1", "track:t2"]
     assert g.nodes["op:s.m"].parameters == {"stems_op": "s", "stem_id": "m", "members": [1], "gains_db": [-6.0], "role": "music"}
+
+
+# ---- AUTOMIX (ADR-29) and MIX_TRACKS (ADR-30)
+def _pcm_wav(path, samples, rate=8000):
+    import wave
+    from array import array
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(array("h", samples).tobytes())
+
+
+def _read_wav(path):
+    import wave
+    from array import array
+    with wave.open(str(path), "rb") as w:
+        a = array("h")
+        a.frombytes(w.readframes(w.getnframes()))
+        return a, w.getnchannels()
+
+
+def test_automix_parameters():
+    v = validate_parameters
+    out = v("AUTOMIX", {"window_ms": 50, "max_gain_rate_db_per_s": 400}, 3, "p")
+    assert out["channels"] == [{"gain_db": 0.0, "weight_db": 0.0, "pinned": False}] * 3 and "hold_below_dbfs" not in out
+    err(v, "INVALID_REQUEST", "AUTOMIX", {"window_ms": 50}, 2, "p")                                   # no default rate
+    err(v, "INVALID_REQUEST", "AUTOMIX", {"max_gain_rate_db_per_s": 400}, 2, "p")                     # no default window
+    err(v, "INVALID_REQUEST", "AUTOMIX", {"window_ms": 50, "max_gain_rate_db_per_s": 5}, 2, "p")
+    err(v, "INVALID_REQUEST", "AUTOMIX", {"window_ms": 50, "max_gain_rate_db_per_s": 400, "channels": [{}]}, 2, "p")
+    err(v, "INVALID_REQUEST", "AUTOMIX", {"window_ms": 50, "max_gain_rate_db_per_s": 400, "channels": [{"pinned": True}] * 2}, 2, "p")
+    err(v, "INVALID_REQUEST", "AUTOMIX", {"window_ms": 50, "max_gain_rate_db_per_s": 400, "channels": [{"pinned": 1}, {}]}, 2, "p")
+    err(v, "INVALID_REQUEST", "AUTOMIX", {"window_ms": 50, "max_gain_rate_db_per_s": 400, "channels": [{"weight_db": -40}, {}]}, 2, "p")
+    out = v("AUTOMIX", {"window_ms": 50, "max_gain_rate_db_per_s": 400, "channels": [{"pinned": True, "gain_db": -6}, {"weight_db": -10}], "hold_below_dbfs": -40}, 2, "p")
+    assert out["channels"][0] == {"gain_db": -6.0, "weight_db": 0.0, "pinned": True} and out["hold_below_dbfs"] == -40.0
+
+
+def test_automix_shares_sum_to_one_and_follow_the_talker(tmp_path):
+    """Pure arithmetic on synthetic 16-bit samples: input 0 loud in the first half, input 1 in the second; the louder
+    one gets ~0 dB, the other its level difference below; the shares always sum to 0 dB; the rate holds."""
+    import math
+    from audio_production import pcm
+    rate, n = 8000, 8000
+    loud = [int(8000 * math.sin(2 * math.pi * 500 * t / rate)) for t in range(n // 2)]
+    quiet = [int(80 * math.sin(2 * math.pi * 300 * t / rate)) for t in range(n // 2)]       # 40 dB lower
+    _pcm_wav(tmp_path / "a.wav", loud + quiet, rate)
+    _pcm_wav(tmp_path / "b.wav", quiet + loud, rate)
+    ch = [{"gain_db": 0.0, "weight_db": 0.0, "pinned": False}] * 2
+    m = pcm.automix([str(tmp_path / "a.wav"), str(tmp_path / "b.wav")], str(tmp_path / "o.wav"), ch, 20.0, 1000.0)
+    assert m["samples"] == n and m["hop_ms"] == 5.0 and m["clipped_samples"] == 0
+    assert abs(m["shared_gain_sum_db"]["min"]) < 1e-9 and abs(m["shared_gain_sum_db"]["max"]) < 1e-9
+    assert m["measured_max_gain_rate_db_per_s"] <= 1000.0 + 1e-6
+    out, channels = _read_wav(tmp_path / "o.wav")
+    assert channels == 1 and len(out) == n
+    # the mix's first half is input 0 at ~0 dB: its peak is within 0.5 dB of input 0's
+    peak = max(abs(x) for x in out[1000:3500])
+    assert abs(20 * math.log10(peak / 8000)) < 0.5, peak
+    # a pinned input keeps its gain; a slower rate is reported and held
+    ch2 = [{"gain_db": -6.0, "weight_db": 0.0, "pinned": True}, {"gain_db": 0.0, "weight_db": 0.0, "pinned": False}]
+    m2 = pcm.automix([str(tmp_path / "a.wav"), str(tmp_path / "b.wav")], str(tmp_path / "p.wav"), ch2, 20.0, 50.0)
+    assert m2["inputs"][0]["pinned"] and m2["inputs"][0]["open_ratio"] is None and m2["measured_max_gain_rate_db_per_s"] <= 50.0 + 1e-6
+    _pcm_wav(tmp_path / "c.wav", loud, 16000)
+    err(pcm.automix, "INVALID_REQUEST", [str(tmp_path / "a.wav"), str(tmp_path / "c.wav")], str(tmp_path / "x.wav"), ch, 20.0, 1000.0)
+    assert not (tmp_path / "x.wav").exists()
+
+
+def test_pan_law_and_pan_mono(tmp_path):
+    import math
+    from audio_production import pcm
+    assert pcm.pan_gains(-1.0) == (1.0, 0.0) or abs(pcm.pan_gains(-1.0)[1]) < 1e-12
+    left, right = pcm.pan_gains(0.0)
+    assert abs(20 * math.log10(left) + 3.0103) < 1e-3 and abs(left - right) < 1e-12
+    assert abs(pcm.pan_gains(1.0)[0]) < 1e-12 and pcm.pan_gains(1.0)[1] == 1.0
+    _pcm_wav(tmp_path / "m.wav", [1000, -1000, 2000])
+    m = pcm.pan_mono(str(tmp_path / "m.wav"), str(tmp_path / "s.wav"), 1.0)
+    out, channels = _read_wav(tmp_path / "s.wav")
+    assert channels == 2 and list(out) == [0, 1000, 0, -1000, 0, 2000] and m["samples"] == 3
+
+
+def test_mix_tracks_parameters_graph_and_references():
+    v = validate_parameters
+    langs = [{"language_id": "ja", "language": "jpn", "title": "Japanese", "inputs": [1]}, {"language_id": "en", "language": "eng", "inputs": [2]}]
+    out = v("MIX_TRACKS", {"levels": [{"gain_db": -12}, {"pan": -0.5}, {}], "languages": langs}, 3, "p")
+    assert out["levels"][1] == {"gain_db": 0.0, "mute": False, "pan": -0.5} and "pan" not in out["levels"][0]
+    err(v, "INVALID_REQUEST", "MIX", {"levels": [{}, {"pan": 0.5}]}, 2, "p")                         # MIX itself: no pan
+    err(v, "INVALID_REQUEST", "MIX_TRACKS", {"levels": [{}, {"pan": 1.5}]}, 2, "p")
+    err(v, "INVALID_REQUEST", "MIX_TRACKS", {"duck": {"input": 1, "amount_db": 12}}, 2, "p")
+    err(v, "INVALID_REQUEST", "MIX_TRACKS", {"languages": [{**langs[0], "language": "JPN"}]}, 3, "p")
+    err(v, "INVALID_REQUEST", "MIX_TRACKS", {"languages": [{**langs[0], "inputs": [0]}]}, 3, "p")     # input 0 is the floor
+    err(v, "INVALID_REQUEST", "MIX_TRACKS", {"languages": [langs[0], {**langs[1], "inputs": [1]}]}, 3, "p")
+    err(v, "INVALID_REQUEST", "MIX_TRACKS", {"languages": [langs[0], {**langs[1], "language_id": "ja"}]}, 3, "p")
+    err(v, "INVALID_REQUEST", "MIX_TRACKS", {"languages": [{**langs[0], "title": "  "}]}, 3, "p")
+    err(v, "INVALID_REQUEST", "MIX_TRACKS", {"levels": [{}, {"mute": True}, {}], "languages": [{**langs[0], "inputs": [1]}], "unknown": 1}, 3, "p")
+    tracks = [{"track_id": t, "source_id": "a"} for t in ("f", "j", "e")]
+    ops = [{"op_id": "m", "type": "MIX_TRACKS", "inputs": ["track:f", "track:j", "track:e"], "parameters": {"languages": langs}}]
+    outs = [{"output_id": "set", "operation": "op:m", "path": "o/set.mkv", "format": "mkv"}, {"output_id": "ja", "operation": "op:m.ja", "path": "o/ja.wav", "format": "wav"}]
+    g = OperationGraph(parse_request(request_doc(ops, tracks=tracks, outputs=outs)).project)
+    assert g.nodes["op:m"].type == "LANGUAGE_TRACKS" and g.nodes["op:m"].inputs == ["op:m.ja", "op:m.en"]
+    assert g.nodes["op:m.ja"].type == "LANGUAGE_MIX" and g.nodes["op:m.ja"].parameters["members"] == [0, 1]
+    assert g.nodes["op:m.en"].parameters["members"] == [0, 2] and g.nodes["op:m"].parameters["tracks"][1] == {"language_id": "en", "language": "eng"}
+    # languages alone: no track-set node, and a language nothing writes is not in the graph
+    g2 = OperationGraph(parse_request(request_doc(ops, tracks=tracks, outputs=outs[1:] + [{"output_id": "en", "operation": "op:m.en", "path": "o/en.wav", "format": "wav"}])).project)
+    assert "op:m" not in g2.nodes and {"op:m.ja", "op:m.en"} <= set(g2.nodes)
+    g3 = OperationGraph(parse_request(request_doc(ops, tracks=tracks, outputs=outs[1:])).project)
+    assert "op:m" not in g3.nodes and "op:m.en" not in g3.nodes and "op:m.ja" in g3.nodes
+    for bad in ([{**outs[0], "format": "wav", "path": "o/set.wav"}], [{**outs[1], "format": "mkv", "path": "o/ja.mkv"}]):
+        e = err(parse_request, "UNSUPPORTED_FORMAT", request_doc(ops, tracks=tracks, outputs=bad))
+        assert e.details["reason"] == "track_set_format"
+    e = err(parse_request, "INVALID_REQUEST", request_doc(ops + [{"op_id": "g", "type": "GAIN", "inputs": ["op:m"], "parameters": {"gain_db": 1}}], tracks=tracks,
+                                                           outputs=[{"output_id": "g", "operation": "op:g", "path": "o/g.wav", "format": "wav"}]))
+    assert e.details["reason"] == "track_set_reference"
+
+
+def test_automix_last_short_hop_keeps_the_rate(tmp_path):
+    """A final hop of one sample gets one sample's slew budget (not a whole hop's), and its rate is measured over it."""
+    from audio_production import pcm
+    a = [1000] * 8000 + [30000]
+    _pcm_wav(tmp_path / "a.wav", a, 8000)
+    _pcm_wav(tmp_path / "b.wav", [1000] * 8001, 8000)
+    ch = [{"gain_db": 0.0, "weight_db": 0.0, "pinned": False}] * 2
+    m = pcm.automix([str(tmp_path / "a.wav"), str(tmp_path / "b.wav")], str(tmp_path / "o.wav"), ch, 50.0, 400.0)
+    assert m["measured_max_gain_rate_db_per_s"] <= 400.0 + 1e-6, m
+
+
+def test_unreferenced_mix_tracks_is_refused():
+    tracks = [{"track_id": t, "source_id": "a"} for t in ("f", "j")]
+    ops = [{"op_id": "m", "type": "MIX_TRACKS", "inputs": ["track:f", "track:j"],
+            "parameters": {"languages": [{"language_id": "ja", "language": "jpn", "inputs": [1]}]}},
+           {"op_id": "g", "type": "GAIN", "inputs": ["track:f"], "parameters": {"gain_db": 1}}]
+    e = err(OperationGraph, "DEPENDENCY_ERROR", parse_request(request_doc(ops, tracks=tracks)).project)
+    assert e.details["unreachable"] == ["op:m"]
